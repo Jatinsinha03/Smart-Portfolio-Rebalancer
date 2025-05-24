@@ -6,14 +6,19 @@ import { JsonRpcProvider, Contract, formatUnits } from "ethers";
 const TOKENS = [
   {
     symbol: "BUSD",
-    address: "0xeD24FC36d5Ee211Ea25A80239Fb8C4Cfd80f12Ee", // BUSD (testnet)
+    address: "0xaB1a4d4f1D656d2450692D237fdD6C7f9146e814", // BUSD (testnet)
     decimals: 18
   },
   {
     symbol: "WBNB",
     address: "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd", // WBNB (testnet)
     decimals: 18
-  }
+  },
+  {
+    symbol: "CAKE",
+    address: "0xFa60D973F7642B748046464e165A65B7323b0DEE", // CAKE (testnet mock address)
+    decimals: 18
+  },
 ];
 
 const erc20Abi = [
@@ -47,7 +52,8 @@ export async function POST(req: NextRequest) {
     // Use more precise token prices
     const tokenPrices: Record<string, number> = {
       "BUSD": 1.0,
-      "WBNB": 420.69
+      "WBNB": 420.69,
+      "CAKE": 2.457
     };
 
     const tokenValues: Record<string, number> = {};

@@ -9,39 +9,70 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Wallet, TrendingUp, BarChart3, RefreshCw, AlertCircle, CheckCircle2, LogOut } from "lucide-react"
+import { 
+  Wallet, 
+  TrendingUp, 
+  BarChart3, 
+  RefreshCw, 
+  AlertCircle, 
+  CheckCircle2, 
+  LogOut,
+  ArrowRightLeft,
+  Download,
+  Upload
+} from "lucide-react"
 import Link from "next/link"
 import { useSession, signOut } from "next-auth/react"
 import { useRouter } from "next/navigation"
+import { ethers } from "ethers"
+import axios from "axios"
+
+// SimpleSwap Contract ABI - abbreviated version for the functions we need
+const SIMPLE_SWAP_ABI = [
+  "function swap(address _fromTokenAddress, address _toTokenAddress, uint256 _amount) public returns (bool)",
+  "function withdrawTokens(address _tokenAddress, uint256 _amount) public returns (bool)",
+  "function tokenData(address token) public view returns (address token, uint256 rate, bool exists)",
+  "function isTokenSupported(address _tokenAddress) public view returns (bool)"
+];
+
+// Contract address for SimpleSwap - replace with actual contract address when deployed
+const SIMPLE_SWAP_ADDRESS = "0xE91866063d5DA85cff082B73a5F93B5d7f334412";
+
+// Token addresses (match the ones in the API)
+const TOKEN_ADDRESSES = {
+  "BUSD": "0xaB1a4d4f1D656d2450692D237fdD6C7f9146e814",
+  "WBNB": "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd",
+  "CAKE": "0xFa60D973F7642B748046464e165A65B7323b0DEE"
+};
 
 // Token color scheme
 const TOKEN_COLORS = {
   "BUSD": "#F0B90B",
   "WBNB": "#F3BA2F",
-  "default": "#8B5CF6"
+  "CAKE": "#8B5CF6"
 };
 
-// Strategy definitions
-const strategies = [
-  {
-    id: "growth",
-    name: "Growth",
-    description: "Higher risk, higher potential returns",
-    allocation: { WBNB: 70, BUSD: 30 },
-  },
-  {
-    id: "balanced",
-    name: "Balanced",
-    description: "Moderate risk and returns",
-    allocation: { WBNB: 50, BUSD: 50 },
-  },
-  {
-    id: "conservative",
-    name: "Conservative",
-    description: "Lower risk, stable returns",
-    allocation: { WBNB: 30, BUSD: 70 },
-  },
-]
+// Fallback color for unknown tokens
+const FALLBACK_COLOR = "#6366F1";
+
+// Rebalance steps enum
+enum RebalanceStep {
+  NotStarted,
+  FirstSwap,
+  SecondSwap,
+  Completed
+}
+
+// Token prediction interface
+interface TokenPrediction {
+  token: string;
+  return_7d: number;
+}
+
+interface AIModelResponse {
+  predictions: TokenPrediction[];
+  new_allocation: Record<string, number>;
+}
 
 // Custom circular progress component
 function CircularProgress({ 
@@ -119,12 +150,25 @@ interface PortfolioData {
 }
 
 export default function Dashboard() {
-  const [selectedStrategy, setSelectedStrategy] = useState("balanced")
-  const [isRebalancing, setIsRebalancing] = useState(false)
+  const [selectedStrategy, setSelectedStrategy] = useState("Balanced")
+  const [rebalanceStep, setRebalanceStep] = useState<RebalanceStep>(RebalanceStep.NotStarted)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [stepStatus, setStepStatus] = useState({
+    firstSwap: false,
+    secondSwap: false
+  })
+  const [transactionError, setTransactionError] = useState<string | null>(null)
+  const [transactionHash, setTransactionHash] = useState<Record<string, string>>({})
   const [showSuccess, setShowSuccess] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [aiPredictions, setAiPredictions] = useState<TokenPrediction[]>([])
+  const [aiAllocation, setAiAllocation] = useState<Record<string, number>>({})
+  const [isAiLoading, setIsAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [strategies, setStrategies] = useState<any[]>([])
+  const [isLoadingStrategies, setIsLoadingStrategies] = useState(false)
   
   const { data: session, status } = useSession()
   const router = useRouter()
@@ -164,7 +208,7 @@ export default function Dashboard() {
           // Add colors to the allocation data
           const allocationsWithColors = data.allocation.map((item: TokenAllocation) => ({
             ...item,
-            color: TOKEN_COLORS[item.symbol as keyof typeof TOKEN_COLORS] || TOKEN_COLORS.default
+            color: TOKEN_COLORS[item.symbol as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR
           }));
           
           setPortfolio({
@@ -186,21 +230,668 @@ export default function Dashboard() {
     fetchPortfolio();
   }, [session, status]);
 
-  const handleRebalance = () => {
-    setIsRebalancing(true)
-    // Simulate rebalancing process
-    setTimeout(() => {
-      setIsRebalancing(false)
-      setShowSuccess(true)
-      setTimeout(() => setShowSuccess(false), 3000)
-    }, 2000)
-  }
+  // Add a function to fetch AI strategies
+  const fetchAIStrategies = async () => {
+    setIsLoadingStrategies(true);
+    try {
+      const response = await axios.get("/api/ai-prediction");
+      if (response.data && response.data.strategies) {
+        setStrategies(response.data.strategies);
+      }
+    } catch (err) {
+      console.error("Error fetching AI strategies:", err);
+      // Fall back to default strategies if API fails
+      setStrategies([
+        {
+          id: "growth",
+          name: "Growth",
+          description: "Higher risk, higher potential returns",
+          allocation: { WBNB: 60, BUSD: 20, CAKE: 20 },
+        },
+        {
+          id: "balanced",
+          name: "Balanced",
+          description: "Moderate risk and returns",
+          allocation: { WBNB: 40, BUSD: 40, CAKE: 20 },
+        },
+        {
+          id: "conservative",
+          name: "Conservative",
+          description: "Lower risk, stable returns",
+          allocation: { WBNB: 20, BUSD: 60, CAKE: 20 },
+        },
+      ]);
+    } finally {
+      setIsLoadingStrategies(false);
+    }
+  };
+
+  // Fetch strategies when the component mounts
+  useEffect(() => {
+    fetchAIStrategies();
+  }, []);
+
+  // Calculate the amounts for rebalancing based on selected strategy
+  const calculateRebalanceAmounts = () => {
+    if (!portfolio || !portfolio.allocation) return null;
+    
+    // Get current token allocations with USD values
+    const currentTokens = portfolio.allocation.reduce((acc, token) => {
+      acc[token.symbol] = {
+        value: token.value,
+        usdValue: token.usdValue,
+        percentage: token.percentage
+      };
+      return acc;
+    }, {} as Record<string, { value: number, usdValue: number, percentage: number }>);
+
+    // Total portfolio value
+    const totalUsdValue = portfolio.totalValue;
+    
+    // Determine target allocations - use AI if available, otherwise use predefined strategies
+    let targetUsdValues: Record<string, number> = {};
+    
+    if (Object.keys(aiAllocation).length > 0) {
+      // Use AI-suggested allocations if available
+      targetUsdValues = Object.entries(aiAllocation).reduce((acc, [symbol, allocation]) => {
+        acc[symbol] = allocation * totalUsdValue; // allocation is already in decimal (0-1)
+        return acc;
+      }, {} as Record<string, number>);
+    } else {
+      // Fallback to strategy-based allocation if AI suggestions not available
+      const strategy = strategies.find(s => s.id === selectedStrategy);
+      if (!strategy) return null;
+      
+      targetUsdValues = Object.entries(strategy.allocation).reduce((acc, [symbol, percentage]) => {
+        acc[symbol] = (Number(percentage) / 100) * totalUsdValue;
+        return acc;
+      }, {} as Record<string, number>);
+    }
+
+    // Identify tokens to swap from and to based on USD value differences
+    const swaps: {
+      fromToken: string;
+      toToken: string;
+      fromTokenAmount: number;
+      usdValueToSwap: number;
+      fromCurrentUsd: number;
+      fromTargetUsd: number;
+      toCurrentUsd: number;
+      toTargetUsd: number;
+    }[] = [];
+
+    // Find tokens that are over their target allocation in USD terms (potential sources)
+    const overAllocatedTokens = Object.keys(currentTokens)
+      .filter(symbol => {
+        const targetUsd = targetUsdValues[symbol] || 0;
+        return currentTokens[symbol].usdValue > targetUsd;
+      })
+      .sort((a, b) => 
+        (currentTokens[b].usdValue - (targetUsdValues[b] || 0)) - 
+        (currentTokens[a].usdValue - (targetUsdValues[a] || 0))
+      );
+
+    // Find tokens that are under their target allocation in USD terms (potential destinations)
+    const underAllocatedTokens = Object.keys(currentTokens)
+      .filter(symbol => {
+        const targetUsd = targetUsdValues[symbol] || 0;
+        return currentTokens[symbol].usdValue < targetUsd;
+      })
+      .sort((a, b) => 
+        ((targetUsdValues[b] || 0) - currentTokens[b].usdValue) - 
+        ((targetUsdValues[a] || 0) - currentTokens[a].usdValue)
+      );
+
+    // Create necessary swaps (from highest over-allocation to highest under-allocation in USD terms)
+    if (overAllocatedTokens.length > 0 && underAllocatedTokens.length > 0) {
+      // We'll only handle the top two priority swaps for simplicity
+      for (let i = 0; i < Math.min(2, underAllocatedTokens.length); i++) {
+        const toToken = underAllocatedTokens[i];
+        const fromToken = overAllocatedTokens[0]; // Always use the most over-allocated token as source
+        
+        const fromCurrentUsd = currentTokens[fromToken].usdValue;
+        const fromTargetUsd = targetUsdValues[fromToken] || 0;
+        
+        const toCurrentUsd = currentTokens[toToken].usdValue;
+        const toTargetUsd = targetUsdValues[toToken] || 0;
+        
+        // Calculate how much USD value to swap
+        const usdValueToSwap = Math.min(
+          fromCurrentUsd - fromTargetUsd,
+          toTargetUsd - toCurrentUsd
+        );
+        
+        // Ensure we don't try to swap more than available
+        if (usdValueToSwap > 0) {
+          // Calculate the actual token amount to swap based on USD value
+          // This assumes we have price data per token
+          // In a real app, you would need precise price data
+          const fromTokenPrice = fromCurrentUsd / currentTokens[fromToken].value;
+          const fromTokenAmount = usdValueToSwap / fromTokenPrice;
+          
+          swaps.push({
+            fromToken,
+            toToken,
+            fromTokenAmount,
+            usdValueToSwap,
+            fromCurrentUsd,
+            fromTargetUsd,
+            toCurrentUsd,
+            toTargetUsd
+          });
+        }
+      }
+    }
+    
+    return {
+      swaps,
+      targetUsdValues,
+      totalUsdValue,
+      overAllocatedTokens,
+      underAllocatedTokens
+    };
+  };
+
+  // Add function to check if token is supported before swapping
+  const checkTokenSupport = async (provider: ethers.BrowserProvider, tokenAddress: string) => {
+    try {
+      const contract = new ethers.Contract(SIMPLE_SWAP_ADDRESS, SIMPLE_SWAP_ABI, provider);
+      // Add method to check if token is supported - this depends on your contract's implementation
+      // For now, we'll just return true and let the contract handle errors
+      return true;
+    } catch (error) {
+      console.error("Error checking token support:", error);
+      return false;
+    }
+  };
+
+  // Update handleFirstSwap function with better error handling
+  const handleFirstSwap = async () => {
+    if (!window.ethereum || !session?.user?.walletAddress) {
+      setTransactionError("MetaMask not installed or not connected");
+      return;
+    }
+
+    const rebalanceData = calculateRebalanceAmounts();
+    if (!rebalanceData || rebalanceData.swaps.length === 0) {
+      setTransactionError("Failed to calculate swap amounts");
+      return;
+    }
+
+    const firstSwap = rebalanceData.swaps[0];
+    
+    setIsProcessing(true);
+    setRebalanceStep(RebalanceStep.FirstSwap);
+    setTransactionError(null);
+    
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      
+      // Get token addresses
+      const fromToken = TOKEN_ADDRESSES[firstSwap.fromToken as keyof typeof TOKEN_ADDRESSES];
+      const toToken = TOKEN_ADDRESSES[firstSwap.toToken as keyof typeof TOKEN_ADDRESSES];
+      
+      if (!fromToken || !toToken) {
+        throw new Error(`Token address not found for ${firstSwap.fromToken} or ${firstSwap.toToken}`);
+      }
+      
+      // Check if tokens are supported before proceeding
+      console.log(`Attempting to swap ${firstSwap.fromToken} (${fromToken}) to ${firstSwap.toToken} (${toToken})`);
+      
+      // Try to create a contract instance
+      const contract = new ethers.Contract(SIMPLE_SWAP_ADDRESS, SIMPLE_SWAP_ABI, signer);
+      
+      // Convert amount to Wei
+      const amount = ethers.parseUnits(firstSwap.fromTokenAmount.toFixed(18), 18);
+      
+      // Check if we need to approve the token first
+      try {
+        // ERC20 minimal ABI just for approval
+        const ERC20_ABI = [
+          "function approve(address spender, uint256 amount) public returns (bool)",
+          "function allowance(address owner, address spender) public view returns (uint256)"
+        ];
+        
+        // Create token contract instance
+        const tokenContract = new ethers.Contract(fromToken, ERC20_ABI, signer);
+        
+        // Check current allowance - wrapped in try/catch to handle tokens with non-standard implementations
+        let needsApproval = true;
+        try {
+          const userAddress = await signer.getAddress();
+          console.log(`Checking allowance for ${userAddress} to spend ${firstSwap.fromToken}`);
+          const currentAllowance = await tokenContract.allowance(userAddress, SIMPLE_SWAP_ADDRESS);
+          console.log(`Current allowance: ${currentAllowance.toString()}`);
+          needsApproval = currentAllowance < amount;
+        } catch (allowanceError) {
+          console.warn(`Could not check allowance for ${firstSwap.fromToken}, proceeding with approval:`, allowanceError);
+          // Continue with approval if we can't check allowance
+        }
+        
+        // Always approve for CAKE token due to potential issues with allowance checks
+        if (needsApproval || firstSwap.fromToken === "CAKE") {
+          console.log(`Approving ${SIMPLE_SWAP_ADDRESS} to spend ${firstSwap.fromToken}`);
+          // Set a very large approval amount to avoid future issues
+          const maxApproval = ethers.parseUnits("999999999", 18);
+          const approveTx = await tokenContract.approve(SIMPLE_SWAP_ADDRESS, maxApproval);
+          await approveTx.wait();
+          console.log("Approval successful");
+        } else {
+          console.log("Token already approved");
+        }
+      } catch (approvalError) {
+        console.error("Approval error:", approvalError);
+        throw new Error(`Failed to approve ${firstSwap.fromToken} for swap: ${approvalError instanceof Error ? approvalError.message : String(approvalError)}`);
+      }
+      
+      // Execute the swap
+      console.log(`Swapping ${amount.toString()} of ${firstSwap.fromToken} to ${firstSwap.toToken}`);
+      console.log('=========== SWAP FUNCTION PARAMETERS ===========');
+      console.log(`fromToken address: ${fromToken}`);
+      console.log(`toToken address: ${toToken}`);
+      console.log(`amount (Wei): ${amount.toString()}`);
+      console.log(`amount (decimal): ${ethers.formatUnits(amount, 18)}`);
+      console.log(`gas limit: 500000`);
+      console.log(`contract address: ${SIMPLE_SWAP_ADDRESS}`);
+      console.log(`caller address: ${await signer.getAddress()}`);
+      console.log('===============================================');
+      
+      // Check if tokens are supported
+      try {
+        // Direct method to check if tokens are supported
+        console.log(`Checking if ${firstSwap.fromToken} is supported...`);
+        let isFromTokenSupported = true;
+        try {
+          isFromTokenSupported = await contract.isTokenSupported(fromToken);
+          console.log(`Is ${firstSwap.fromToken} supported? ${isFromTokenSupported}`);
+        } catch (err) {
+          console.log(`Could not check if ${firstSwap.fromToken} is supported, assuming it is:`, err);
+        }
+
+        console.log(`Checking if ${firstSwap.toToken} is supported...`);
+        let isToTokenSupported = true;
+        try {
+          isToTokenSupported = await contract.isTokenSupported(toToken);
+          console.log(`Is ${firstSwap.toToken} supported? ${isToTokenSupported}`);
+        } catch (err) {
+          console.log(`Could not check if ${firstSwap.toToken} is supported, assuming it is:`, err);
+        }
+
+        // Try with more direct approach, bypassing gas estimation
+        try {
+          console.log(`Sending swap transaction with parameters:
+            - fromToken: ${fromToken}
+            - toToken: ${toToken}
+            - amount: ${amount.toString()}
+          `);
+          
+          // Set a high gas limit manually instead of estimating
+          const tx = await contract.swap(fromToken, toToken, amount, {
+            gasLimit: 500000 // Set a high fixed gas limit
+          });
+          
+          console.log(`Transaction sent: ${tx.hash}`);
+          console.log(`Waiting for transaction confirmation...`);
+          
+          await tx.wait();
+          console.log(`Transaction confirmed!`);
+          
+          setTransactionHash(prev => ({ ...prev, firstSwap: tx.hash }));
+          setStepStatus(prev => ({ ...prev, firstSwap: true }));
+          
+          // If there's a second swap, move to that step, otherwise mark as completed
+          if (rebalanceData && rebalanceData.swaps.length > 1) {
+            setRebalanceStep(RebalanceStep.SecondSwap);
+          } else {
+            setRebalanceStep(RebalanceStep.Completed);
+            setShowSuccess(true);
+            
+            // Refresh portfolio data after a successful rebalance
+            setTimeout(() => {
+              if (session?.user?.walletAddress) {
+                fetch("/api/portfolio", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ walletAddress: session.user.walletAddress }),
+                }).then(response => {
+                  if (response.ok) return response.json();
+                  throw new Error("Failed to refresh portfolio");
+                }).then(data => {
+                  const allocationsWithColors = data.allocation.map((item: TokenAllocation) => ({
+                    ...item,
+                    color: TOKEN_COLORS[item.symbol as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR
+                  }));
+                  
+                  setPortfolio({
+                    ...data,
+                    allocation: allocationsWithColors
+                  });
+                }).catch(err => {
+                  console.error("Error refreshing portfolio:", err);
+                });
+              }
+            }, 2000);
+          }
+        } catch (directSwapError: any) {
+          // Log the full error object
+          console.error("Direct swap error:", JSON.stringify(directSwapError, null, 2));
+          
+          // Extract as much information as possible
+          const errorDetails = {
+            message: directSwapError.message || "Unknown error",
+            code: directSwapError.code,
+            reason: directSwapError.reason,
+            data: directSwapError.data,
+            transaction: directSwapError.transaction
+          };
+          
+          console.error("Error details:", errorDetails);
+          
+          if (directSwapError.reason && directSwapError.reason.includes("From-token not supported")) {
+            throw new Error(`Token ${firstSwap.fromToken} is not supported by the contract. Please try a different token or address.`);
+          } else if (directSwapError.reason && directSwapError.reason.includes("To-token not supported")) {
+            throw new Error(`Token ${firstSwap.toToken} is not supported by the contract. Please try a different token or address.`);
+          } else {
+            throw new Error(`Swap failed: ${directSwapError.message || "Unknown error"}. Please check token addresses and try again.`);
+          }
+        }
+      } catch (swapError: any) {
+        // Re-throw the error with more context
+        console.error("Swap preparation error:", swapError);
+        throw swapError;
+      }
+    } catch (err) {
+      console.error("First swap error:", err);
+      setTransactionError(err instanceof Error ? err.message : `Failed to swap ${firstSwap.fromToken} to ${firstSwap.toToken}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Update handleSecondSwap function with proper scoping
+  const handleSecondSwap = async () => {
+    if (!window.ethereum || !session?.user?.walletAddress) {
+      setTransactionError("MetaMask not installed or not connected");
+      return;
+    }
+
+    const rebalanceData = calculateRebalanceAmounts();
+    if (!rebalanceData || rebalanceData.swaps.length < 2) {
+      setTransactionError("No second swap needed");
+      setRebalanceStep(RebalanceStep.Completed);
+      setShowSuccess(true);
+      return;
+    }
+
+    const secondSwap = rebalanceData.swaps[1];
+    
+    setIsProcessing(true);
+    setTransactionError(null);
+    
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      
+      // Get token addresses
+      const fromToken = TOKEN_ADDRESSES[secondSwap.fromToken as keyof typeof TOKEN_ADDRESSES];
+      const toToken = TOKEN_ADDRESSES[secondSwap.toToken as keyof typeof TOKEN_ADDRESSES];
+      
+      if (!fromToken || !toToken) {
+        throw new Error(`Token address not found for ${secondSwap.fromToken} or ${secondSwap.toToken}`);
+      }
+      
+      // Check if tokens are supported before proceeding
+      console.log(`Attempting to swap ${secondSwap.fromToken} (${fromToken}) to ${secondSwap.toToken} (${toToken})`);
+      
+      // Try to create a contract instance
+      const contract = new ethers.Contract(SIMPLE_SWAP_ADDRESS, SIMPLE_SWAP_ABI, signer);
+      
+      // Convert amount to Wei
+      const amount = ethers.parseUnits(secondSwap.fromTokenAmount.toFixed(18), 18);
+      
+      // Check if we need to approve the token first
+      try {
+        // ERC20 minimal ABI just for approval
+        const ERC20_ABI = [
+          "function approve(address spender, uint256 amount) public returns (bool)",
+          "function allowance(address owner, address spender) public view returns (uint256)"
+        ];
+        
+        // Create token contract instance
+        const tokenContract = new ethers.Contract(fromToken, ERC20_ABI, signer);
+        
+        // Check current allowance - wrapped in try/catch to handle tokens with non-standard implementations
+        let needsApproval = true;
+        try {
+          const userAddress = await signer.getAddress();
+          console.log(`Checking allowance for ${userAddress} to spend ${secondSwap.fromToken}`);
+          const currentAllowance = await tokenContract.allowance(userAddress, SIMPLE_SWAP_ADDRESS);
+          console.log(`Current allowance: ${currentAllowance.toString()}`);
+          needsApproval = currentAllowance < amount;
+        } catch (allowanceError) {
+          console.warn(`Could not check allowance for ${secondSwap.fromToken}, proceeding with approval:`, allowanceError);
+          // Continue with approval if we can't check allowance
+        }
+        
+        // Always approve for CAKE token due to potential issues with allowance checks
+        if (needsApproval || secondSwap.fromToken === "CAKE") {
+          console.log(`Approving ${SIMPLE_SWAP_ADDRESS} to spend ${secondSwap.fromToken}`);
+          // Set a very large approval amount to avoid future issues
+          const maxApproval = ethers.parseUnits("999999999", 18);
+          const approveTx = await tokenContract.approve(SIMPLE_SWAP_ADDRESS, maxApproval);
+          await approveTx.wait();
+          console.log("Approval successful");
+        } else {
+          console.log("Token already approved");
+        }
+      } catch (approvalError) {
+        console.error("Approval error:", approvalError);
+        throw new Error(`Failed to approve ${secondSwap.fromToken} for swap: ${approvalError instanceof Error ? approvalError.message : String(approvalError)}`);
+      }
+      
+      // Execute the swap
+      console.log(`Swapping ${amount.toString()} of ${secondSwap.fromToken} to ${secondSwap.toToken}`);
+      console.log('=========== SWAP FUNCTION PARAMETERS ===========');
+      console.log(`fromToken address: ${fromToken}`);
+      console.log(`toToken address: ${toToken}`);
+      console.log(`amount (Wei): ${amount.toString()}`);
+      console.log(`amount (decimal): ${ethers.formatUnits(amount, 18)}`);
+      console.log(`gas limit: 500000`);
+      console.log(`contract address: ${SIMPLE_SWAP_ADDRESS}`);
+      console.log(`caller address: ${await signer.getAddress()}`);
+      console.log('===============================================');
+      
+      // Check if tokens are supported
+      try {
+        // Direct method to check if tokens are supported
+        console.log(`Checking if ${secondSwap.fromToken} is supported...`);
+        let isFromTokenSupported = true;
+        try {
+          isFromTokenSupported = await contract.isTokenSupported(fromToken);
+          console.log(`Is ${secondSwap.fromToken} supported? ${isFromTokenSupported}`);
+        } catch (err) {
+          console.log(`Could not check if ${secondSwap.fromToken} is supported, assuming it is:`, err);
+        }
+
+        console.log(`Checking if ${secondSwap.toToken} is supported...`);
+        let isToTokenSupported = true;
+        try {
+          isToTokenSupported = await contract.isTokenSupported(toToken);
+          console.log(`Is ${secondSwap.toToken} supported? ${isToTokenSupported}`);
+        } catch (err) {
+          console.log(`Could not check if ${secondSwap.toToken} is supported, assuming it is:`, err);
+        }
+
+        // Try with more direct approach, bypassing gas estimation
+        try {
+          console.log(`Sending swap transaction with parameters:
+            - fromToken: ${fromToken}
+            - toToken: ${toToken}
+            - amount: ${amount.toString()}
+          `);
+          
+          // Set a high gas limit manually instead of estimating
+          const tx = await contract.swap(fromToken, toToken, amount, {
+            gasLimit: 500000 // Set a high fixed gas limit
+          });
+          
+          console.log(`Transaction sent: ${tx.hash}`);
+          console.log(`Waiting for transaction confirmation...`);
+          
+          await tx.wait();
+          console.log(`Transaction confirmed!`);
+          
+          setTransactionHash(prev => ({ ...prev, secondSwap: tx.hash }));
+          setStepStatus(prev => ({ ...prev, secondSwap: true }));
+          setRebalanceStep(RebalanceStep.Completed);
+          setShowSuccess(true);
+          
+          // Refresh portfolio data after a successful rebalance
+          setTimeout(() => {
+            if (session?.user?.walletAddress) {
+              fetch("/api/portfolio", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ walletAddress: session.user.walletAddress }),
+              }).then(response => {
+                if (response.ok) return response.json();
+                throw new Error("Failed to refresh portfolio");
+              }).then(data => {
+                const allocationsWithColors = data.allocation.map((item: TokenAllocation) => ({
+                  ...item,
+                  color: TOKEN_COLORS[item.symbol as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR
+                }));
+                
+                setPortfolio({
+                  ...data,
+                  allocation: allocationsWithColors
+                });
+              }).catch(err => {
+                console.error("Error refreshing portfolio:", err);
+              });
+            }
+          }, 2000);
+        } catch (directSwapError: any) {
+          // Log the full error object
+          console.error("Direct swap error:", JSON.stringify(directSwapError, null, 2));
+          
+          // Extract as much information as possible
+          const errorDetails = {
+            message: directSwapError.message || "Unknown error",
+            code: directSwapError.code,
+            reason: directSwapError.reason,
+            data: directSwapError.data,
+            transaction: directSwapError.transaction
+          };
+          
+          console.error("Error details:", errorDetails);
+          
+          if (directSwapError.reason && directSwapError.reason.includes("From-token not supported")) {
+            throw new Error(`Token ${secondSwap.fromToken} is not supported by the contract. Please try a different token or address.`);
+          } else if (directSwapError.reason && directSwapError.reason.includes("To-token not supported")) {
+            throw new Error(`Token ${secondSwap.toToken} is not supported by the contract. Please try a different token or address.`);
+          } else {
+            throw new Error(`Swap failed: ${directSwapError.message || "Unknown error"}. Please check token addresses and try again.`);
+          }
+        }
+      } catch (swapError: any) {
+        // Re-throw the error with more context
+        console.error("Swap preparation error:", swapError);
+        throw swapError;
+      }
+    } catch (err) {
+      console.error("Second swap error:", err);
+      setTransactionError(err instanceof Error ? err.message : `Failed to swap ${secondSwap.fromToken} to ${secondSwap.toToken}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Update resetRebalanceProcess function
+  const resetRebalanceProcess = () => {
+    setRebalanceStep(RebalanceStep.NotStarted);
+    setStepStatus({
+      firstSwap: false,
+      secondSwap: false
+    });
+    setTransactionError(null);
+    setTransactionHash({});
+    setShowSuccess(false);
+  };
 
   // Format wallet address for display
   const formatWalletAddress = (address: string | null | undefined) => {
     if (!address) return null
     return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`
   }
+
+  // Compute the rebalance preview
+  const rebalancePreview = calculateRebalanceAmounts();
+
+  // Update the fetchAIPredictions function to ensure we check portfolio data
+  const fetchAIPredictions = async (specificStrategy = selectedStrategy) => {
+    if (!portfolio || !portfolio.allocation || portfolio.allocation.length === 0) {
+      setAiError("No portfolio data available for prediction");
+      return null;
+    }
+
+    setIsAiLoading(true);
+    setAiError(null);
+
+    try {
+      // Create current allocation object for the AI model
+      const currentAllocation = portfolio.allocation.reduce((acc, token) => {
+        acc[token.symbol] = token.percentage / 100; // Convert percentage to decimal
+        return acc;
+      }, {} as Record<string, number>);
+
+      // Call the AI model API with the selected strategy
+      const response = await axios.post("/api/ai-prediction", {
+        allocation: currentAllocation,
+        strategy: specificStrategy
+      });
+
+      setAiPredictions(response.data.predictions);
+      setAiAllocation(response.data.new_allocation);
+      
+      // If the API response includes strategy information, update our strategy data
+      if (response.data.strategy) {
+        const updatedStrategies = [...strategies];
+        const strategyIndex = updatedStrategies.findIndex(s => s.id === response.data.strategy.id);
+        
+        if (strategyIndex >= 0) {
+          updatedStrategies[strategyIndex] = response.data.strategy;
+          setStrategies(updatedStrategies);
+        }
+      }
+      
+      // Force rebalance calculation update when AI allocation changes
+      return response.data;
+    } catch (err) {
+      console.error("Error fetching AI predictions:", err);
+      setAiError(err instanceof Error ? err.message : "Failed to fetch AI predictions");
+      return null;
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+  
+  // Update the strategy selection handler to fetch new AI predictions when strategy changes
+  const handleStrategyChange = async (strategy: string) => {
+    setSelectedStrategy(strategy);
+    if (portfolio && portfolio.allocation && portfolio.allocation.length > 0) {
+      await fetchAIPredictions(strategy);
+    }
+  };
+
+  // Replace the existing useEffect for fetching AI predictions with this one
+  // that only runs when portfolio data changes, not on selectedStrategy changes
+  useEffect(() => {
+    if (portfolio && portfolio.allocation && portfolio.allocation.length > 0) {
+      fetchAIPredictions(selectedStrategy);
+    }
+  }, [portfolio]); // Only depend on portfolio changes, not selectedStrategy
 
   if (status === "loading") {
     return (
@@ -402,108 +1093,474 @@ export default function Dashboard() {
           </div>
         </section>
 
+        {/* After Current Allocation and before Strategy & Rebalancing section */}
+        <section className="space-y-6">
+          <h2 className="text-2xl font-bold">AI Predictions</h2>
+          <Card className="bg-gray-800/50 border-gray-700 backdrop-blur-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg">AI Model Predictions</CardTitle>
+              <CardDescription>7-day return predictions and suggested allocation</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {isAiLoading ? (
+                <div className="flex justify-center">
+                  <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin" />
+                </div>
+              ) : aiError ? (
+                <div className="bg-gray-700/30 p-4 rounded-lg border border-gray-600 text-center">
+                  <AlertCircle className="w-8 h-8 text-amber-400 mx-auto mb-2" />
+                  <p className="text-amber-300">{aiError}</p>
+                </div>
+              ) : aiPredictions.length > 0 ? (
+                <>
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-medium text-gray-300">7-Day Return Predictions</h3>
+                    {aiPredictions.map((prediction) => (
+                      <div key={prediction.token} className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center">
+                            <div 
+                              className="w-4 h-4 rounded-full mr-2" 
+                              style={{ backgroundColor: TOKEN_COLORS[prediction.token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR }}
+                            ></div>
+                            <span className="font-medium">{prediction.token}</span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <span className={`font-medium ${prediction.return_7d >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              {(prediction.return_7d * 100).toFixed(2)}%
+                            </span>
+                            <span className="text-sm text-gray-400">
+                              7-day forecast
+                            </span>
+                          </div>
+                        </div>
+                        <Progress 
+                          value={50 + (prediction.return_7d * 500)} 
+                          className="h-2 bg-gray-700"
+                        >
+                          <div
+                            className="h-full"
+                            style={{
+                              width: `${50 + (prediction.return_7d * 500)}%`,
+                              backgroundColor: prediction.return_7d >= 0 ? '#10B981' : '#EF4444',
+                              transition: "width 0.3s ease"
+                            }}
+                          />
+                        </Progress>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="h-px bg-gray-700 my-4"></div>
+
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-medium text-gray-300">AI Suggested Allocation</h3>
+                    <div className="flex justify-center mb-4">
+                      <div className="w-48 h-48">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={Object.entries(aiAllocation).map(([token, allocation]) => ({
+                                symbol: token,
+                                percentage: allocation * 100,
+                                color: TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR
+                              }))}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={60}
+                              outerRadius={80}
+                              paddingAngle={2}
+                              dataKey="percentage"
+                            >
+                              {Object.entries(aiAllocation).map(([token, _], index) => (
+                                <Cell 
+                                  key={`cell-${index}`} 
+                                  fill={TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR} 
+                                />
+                              ))}
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    {Object.entries(aiAllocation).map(([token, allocation]) => (
+                      <div key={token} className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center">
+                            <div 
+                              className="w-4 h-4 rounded-full mr-2" 
+                              style={{ backgroundColor: TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR }}
+                            ></div>
+                            <span className="font-medium">{token}</span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-medium">{(allocation * 100).toFixed(2)}%</span>
+                          </div>
+                        </div>
+                        <Progress value={allocation * 100} className="h-2 bg-gray-700">
+                          <div
+                            className="h-full"
+                            style={{
+                              width: `${allocation * 100}%`,
+                              backgroundColor: TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR,
+                              transition: "width 0.3s ease"
+                            }}
+                          />
+                        </Progress>
+                      </div>
+                    ))}
+
+                    <Button 
+                      className="w-full mt-2" 
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fetchAIPredictions()}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Refresh Predictions
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="bg-gray-700/30 p-6 rounded-lg border border-gray-600 text-center">
+                  <BarChart3 className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                  <p>No predictions available</p>
+                  <p className="text-sm text-gray-400 mt-2">
+                    Connect your wallet or add tokens to get AI predictions
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
         {/* Strategy and Rebalance Section */}
         <section className="space-y-6 pb-8">
           <h2 className="text-2xl font-bold">Strategy & Rebalancing</h2>
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            {/* Strategy Selection */}
-            <Card className="xl:col-span-2 bg-gray-800/50 border-gray-700 backdrop-blur-sm">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg">Investment Strategy</CardTitle>
-                <CardDescription>Select your preferred risk profile</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <Tabs defaultValue="balanced" onValueChange={setSelectedStrategy} className="w-full">
-                  <TabsList className="grid grid-cols-3 w-full">
-                    <TabsTrigger value="growth">Growth</TabsTrigger>
-                    <TabsTrigger value="balanced">Balanced</TabsTrigger>
-                    <TabsTrigger value="conservative">Conservative</TabsTrigger>
-                  </TabsList>
+          
+          {/* Strategy Selection - Make it full width */}
+          <Card className="bg-gray-800/50 border-gray-700 backdrop-blur-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg">Investment Strategy</CardTitle>
+              <CardDescription>Select your preferred risk profile</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <Tabs defaultValue="Balanced" onValueChange={setSelectedStrategy} className="w-full">
+                <TabsList className="grid grid-cols-3 w-full">
+                  <TabsTrigger value="Growth" onClick={() => handleStrategyChange("Growth")}>Growth</TabsTrigger>
+                  <TabsTrigger value="Balanced" onClick={() => handleStrategyChange("Balanced")}>Balanced</TabsTrigger>
+                  <TabsTrigger value="Preservation" onClick={() => handleStrategyChange("Preservation")}>Preservation</TabsTrigger>
+                </TabsList>
 
-                  {strategies.map((strategy) => (
-                    <TabsContent key={strategy.id} value={strategy.id} className="mt-6">
-                      <div className="bg-gray-700/30 rounded-lg p-6 border border-gray-700 space-y-6">
-                        <div>
-                          <h3 className="font-medium text-lg mb-2">{strategy.name} Strategy</h3>
-                          <p className="text-gray-300">{strategy.description}</p>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                          {Object.entries(strategy.allocation).map(([token, percentage]) => (
-                            <div key={token} className="flex flex-col items-center">
-                              <CircularProgress
-                                value={percentage}
-                                color={TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || TOKEN_COLORS.default}
-                                label={token}
-                                sublabel={`${percentage}%`}
-                              />
-                            </div>
-                          ))}
+                {isLoadingStrategies ? (
+                  <div className="flex justify-center mt-6">
+                    <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin" />
+                  </div>
+                ) : strategies.map((strategy) => (
+                  <TabsContent key={strategy.id} value={strategy.id === "conservative" ? "preservation" : strategy.id} className="mt-6">
+                    <div className="bg-gray-700/30 rounded-lg p-6 border border-gray-700 space-y-6">
+                      <div>
+                        <h3 className="font-medium text-lg mb-2">{strategy.name} Strategy</h3>
+                        <p className="text-gray-300">{strategy.description}</p>
+                        <div className="mt-2">
+                          <Badge variant="outline" className="bg-cyan-500/10 text-cyan-300 border-cyan-500/20">
+                            AI-Powered Allocation
+                          </Badge>
                         </div>
                       </div>
-                    </TabsContent>
-                  ))}
-                </Tabs>
-              </CardContent>
-            </Card>
 
-            {/* Rebalance Action */}
-            <Card className="bg-gray-800/50 border-gray-700 backdrop-blur-sm">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg">Rebalance Portfolio</CardTitle>
-                <CardDescription>Optimize your assets with one click</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col items-center justify-center space-y-6 py-8">
-                {showSuccess ? (
-                  <motion.div
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    className="flex flex-col items-center text-center space-y-4"
-                  >
-                    <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center">
-                      <CheckCircle2 className="w-8 h-8 text-green-500" />
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {Object.entries(strategy.allocation).map(([token, percentage]) => (
+                          <div key={token} className="flex flex-col items-center">
+                            <CircularProgress
+                              value={typeof percentage === 'number' ? percentage : Number(percentage)}
+                              color={TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR}
+                              label={token}
+                              sublabel={`${typeof percentage === 'number' ? percentage : Number(percentage)}%`}
+                            />
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="text-lg font-medium mb-2">Rebalance Complete!</h3>
-                      <p className="text-sm text-gray-300">
-                        Your portfolio has been successfully rebalanced according to the {selectedStrategy} strategy.
-                      </p>
-                    </div>
-                  </motion.div>
-                ) : (
-                  <>
-                    <div className="w-24 h-24 rounded-full bg-gradient-to-r from-cyan-500/20 to-purple-500/20 flex items-center justify-center border-4 border-cyan-500/30">
-                      <BarChart3 className="w-12 h-12 text-cyan-400" />
-                    </div>
-                    <div className="text-center space-y-4">
-                      <p className="text-sm text-gray-300">
-                        Rebalance your portfolio according to the{" "}
-                        <span className="font-medium text-cyan-400">{selectedStrategy}</span> strategy.
-                      </p>
-                      <Button
-                        size="lg"
-                        onClick={handleRebalance}
-                        disabled={isRebalancing || !portfolio || portfolio.allocation.length === 0}
-                        className="bg-gradient-to-r from-cyan-500 to-purple-600 hover:from-cyan-600 hover:to-purple-700 border-0 w-full"
-                      >
-                        {isRebalancing ? (
-                          <>
-                            <RefreshCw className="w-5 h-5 mr-2 animate-spin" />
-                            Rebalancing...
-                          </>
-                        ) : (
-                          "Rebalance Portfolio"
+                  </TabsContent>
+                ))}
+              </Tabs>
+            </CardContent>
+          </Card>
+
+          {/* Rebalance Action - Full width, positioned below strategy */}
+          <Card className="bg-gray-800/50 border-gray-700 backdrop-blur-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg">Rebalance Portfolio</CardTitle>
+              <CardDescription>
+                {showSuccess 
+                  ? "Rebalancing completed successfully!" 
+                  : `Follow the steps to rebalance according to the ${selectedStrategy} strategy`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col items-center justify-center space-y-6 py-4">
+              {showSuccess ? (
+                <motion.div
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  className="flex flex-col items-center text-center space-y-4"
+                >
+                  <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center">
+                    <CheckCircle2 className="w-8 h-8 text-green-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-medium mb-2">Rebalance Complete!</h3>
+                    <p className="text-sm text-gray-300">
+                      Your portfolio has been successfully rebalanced according to the {selectedStrategy} strategy.
+                    </p>
+                    {Object.entries(transactionHash).length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {transactionHash.firstSwap && (
+                          <a 
+                            href={`https://testnet.bscscan.com/tx/${transactionHash.firstSwap}`} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-sm text-cyan-400 hover:text-cyan-300 underline block"
+                          >
+                            View First Swap on BscScan
+                          </a>
                         )}
-                      </Button>
+                        {transactionHash.secondSwap && (
+                          <a 
+                            href={`https://testnet.bscscan.com/tx/${transactionHash.secondSwap}`} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-sm text-cyan-400 hover:text-cyan-300 underline block"
+                          >
+                            View Second Swap on BscScan
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={resetRebalanceProcess}
+                    className="mt-2"
+                  >
+                    Rebalance Again
+                  </Button>
+                </motion.div>
+              ) : (
+                <div className="w-full space-y-6">
+                  {/* Current vs Target Allocation Summary */}
+                  {rebalancePreview && (
+                    <div className="bg-gray-700/30 p-4 rounded-lg border border-gray-600 mb-4">
+                      <h4 className="text-sm font-medium mb-2">Rebalance Preview (USD Values)</h4>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between items-center">
+                          <span>Total Portfolio Value:</span>
+                          <span className="font-medium">${rebalancePreview.totalUsdValue.toFixed(2)}</span>
+                        </div>
+                        
+                        <div className="h-px bg-gray-600 my-2"></div>
+                        
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-3">
+                          {portfolio && Object.entries(rebalancePreview.targetUsdValues).map(([token, targetUsd]) => {
+                            const currentToken = portfolio.allocation.find(t => t.symbol === token);
+                            const currentUsd = currentToken?.usdValue || 0;
+                            const diff = currentUsd - targetUsd;
+                            const status = diff > 1 ? "over" : diff < -1 ? "under" : "balanced";
+                            
+                            return (
+                              <div key={token} className="bg-gray-800/50 p-2 rounded border border-gray-700">
+                                <div className="flex justify-between items-center mb-1">
+                                  <span className="font-medium flex items-center">
+                                    <div 
+                                      className="w-2 h-2 rounded-full mr-1" 
+                                      style={{ backgroundColor: TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] }}
+                                    ></div>
+                                    {token}
+                                  </span>
+                                  <Badge variant={status === "balanced" ? "outline" : status === "over" ? "destructive" : "default"} className="text-xs truncate">
+                                    {status === "balanced" ? "OK" : status === "over" ? "Over" : "Under"}
+                                  </Badge>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                  <span className="truncate">Current: ${currentUsd.toFixed(2)}</span>
+                                  <span className="truncate">Target: ${targetUsd.toFixed(2)}</span>
+                                </div>
+                                <Progress 
+                                  value={Math.min(100, (currentUsd / targetUsd) * 100)} 
+                                  className={`h-1.5 mt-1 ${
+                                    status === "balanced" ? "bg-gray-700" : 
+                                    status === "over" ? "bg-gray-700" : 
+                                    "bg-gray-700"
+                                  }`}
+                                >
+                                  <div
+                                    className={`h-full ${
+                                      status === "balanced" ? "bg-green-500" : 
+                                      status === "over" ? "bg-red-500" : 
+                                      "bg-blue-500"
+                                    }`}
+                                    style={{
+                                      width: `${Math.min(100, (currentUsd / targetUsd) * 100)}%`,
+                                      transition: "width 0.3s ease"
+                                    }}
+                                  />
+                                </Progress>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        
+                        {/* Swap Details Section */}
+                        <div className="mt-4">
+                          <div className="flex justify-between items-center mb-2">
+                            <h4 className="font-medium">Required Swaps:</h4>
+                            {rebalancePreview.swaps.length === 0 && (
+                              <Badge variant="outline" className="bg-amber-500/10 text-amber-300 border-amber-500/20">
+                                No Swaps Needed
+                              </Badge>
+                            )}
+                          </div>
+                          
+                          {rebalancePreview.swaps.length > 0 ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {rebalancePreview.swaps.map((swap, index) => (
+                                <div key={index} className="flex flex-col space-y-1 bg-gray-800/70 p-3 rounded">
+                                  <div className="flex justify-between items-center">
+                                    <span className="flex items-center">
+                                      <div 
+                                        className="w-2 h-2 rounded-full mr-1" 
+                                        style={{ backgroundColor: TOKEN_COLORS[swap.fromToken as keyof typeof TOKEN_COLORS] }}
+                                      ></div>
+                                      <span>From {swap.fromToken}</span>
+                                    </span>
+                                    <span className="text-sm truncate ml-2">
+                                      ${swap.usdValueToSwap.toFixed(2)}&nbsp;
+                                      <span className="text-xs text-gray-400">
+                                        ({swap.fromTokenAmount.toFixed(4)})
+                                      </span>
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between items-center pl-4">
+                                    <span className="flex items-center">
+                                      <ArrowRightLeft className="w-3 h-3 mr-1 rotate-90" />
+                                      <div 
+                                        className="w-2 h-2 rounded-full mr-1" 
+                                        style={{ backgroundColor: TOKEN_COLORS[swap.toToken as keyof typeof TOKEN_COLORS] }}
+                                      ></div>
+                                      <span>To {swap.toToken}</span>
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-center text-gray-400 py-3 bg-gray-800/40 rounded border border-gray-700">
+                              Your portfolio is already balanced according to the selected strategy
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </>
-                )}
-              </CardContent>
-              <CardFooter className="bg-gray-800/80 border-t border-gray-700">
-                <div className="text-xs text-gray-400 text-center w-full">Estimated gas fee: 0.0012 BNB (~$0.50)</div>
-              </CardFooter>
-            </Card>
-          </div>
+                  )}
+
+                  {/* Rebalance Progress Steps */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                    {/* Step 1: First Swap */}
+                    <div className={`p-3 rounded-lg border ${stepStatus.firstSwap ? 'bg-green-500/10 border-green-500/30' : 'bg-gray-700/30 border-gray-600'}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          {stepStatus.firstSwap ? (
+                            <CheckCircle2 className="w-5 h-5 text-green-500" />
+                          ) : (
+                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center
+                              ${rebalanceStep === RebalanceStep.FirstSwap && isProcessing ? 'border-cyan-500 border-t-transparent animate-spin' : 'border-gray-500'}`}></div>
+                          )}
+                          <div>
+                            <span className="font-medium">1. First Swap</span>
+                            {rebalancePreview && rebalancePreview.swaps[0] && (
+                              <p className="text-xs text-gray-400 truncate max-w-[180px] sm:max-w-none">
+                                {rebalancePreview.swaps[0].fromToken} → {rebalancePreview.swaps[0].toToken} 
+                                (${rebalancePreview.swaps[0].usdValueToSwap.toFixed(2)})
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          disabled={isProcessing || (rebalanceStep !== RebalanceStep.NotStarted && rebalanceStep !== RebalanceStep.FirstSwap) || stepStatus.firstSwap || !(rebalancePreview && rebalancePreview.swaps.length > 0)}
+                          onClick={handleFirstSwap}
+                          className="flex items-center space-x-1"
+                        >
+                          <ArrowRightLeft className="w-4 h-4 mr-1" />
+                          <span>Swap</span>
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Step 2: Second Swap (if needed) */}
+                    <div className={`p-3 rounded-lg border ${stepStatus.secondSwap ? 'bg-green-500/10 border-green-500/30' : 'bg-gray-700/30 border-gray-600'}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          {stepStatus.secondSwap ? (
+                            <CheckCircle2 className="w-5 h-5 text-green-500" />
+                          ) : (
+                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center
+                              ${rebalanceStep === RebalanceStep.SecondSwap && isProcessing ? 'border-cyan-500 border-t-transparent animate-spin' : 'border-gray-500'}`}></div>
+                          )}
+                          <div>
+                            <span className="font-medium">2. Second Swap</span>
+                            {rebalancePreview && rebalancePreview.swaps[1] ? (
+                              <p className="text-xs text-gray-400 truncate max-w-[180px] sm:max-w-none">
+                                {rebalancePreview.swaps[1].fromToken} → {rebalancePreview.swaps[1].toToken}
+                                (${rebalancePreview.swaps[1].usdValueToSwap.toFixed(2)})
+                              </p>
+                            ) : (
+                              <p className="text-xs text-gray-400">Not needed for this rebalance</p>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          disabled={isProcessing || rebalanceStep !== RebalanceStep.SecondSwap || stepStatus.secondSwap || !(rebalancePreview && rebalancePreview.swaps.length > 1)}
+                          onClick={handleSecondSwap}
+                          className="flex items-center space-x-1"
+                        >
+                          <ArrowRightLeft className="w-4 h-4 mr-1" />
+                          <span>Swap</span>
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {transactionError && (
+                    <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-lg text-sm text-red-300">
+                      <div className="flex items-start">
+                        <AlertCircle className="w-4 h-4 mt-0.5 mr-2 flex-shrink-0" />
+                        <span>{transactionError}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    disabled={isProcessing || rebalanceStep === RebalanceStep.NotStarted || showSuccess}
+                    onClick={resetRebalanceProcess}
+                    className="w-full mt-4"
+                  >
+                    Reset Process
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+            <CardFooter className="bg-gray-800/80 border-t border-gray-700">
+              <div className="text-xs text-gray-400 text-center w-full">
+                {isProcessing ? "Processing transaction..." : "Estimated gas fee: 0.0012 BNB (~$0.50)"}
+              </div>
+            </CardFooter>
+          </Card>
         </section>
       </main>
     </div>
