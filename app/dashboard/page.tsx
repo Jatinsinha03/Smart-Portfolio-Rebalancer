@@ -19,7 +19,9 @@ import {
   LogOut,
   ArrowRightLeft,
   Download,
-  Upload
+  Upload,
+  History,
+  ExternalLink
 } from "lucide-react"
 import Link from "next/link"
 import { useSession, signOut } from "next-auth/react"
@@ -72,6 +74,21 @@ interface TokenPrediction {
 interface AIModelResponse {
   predictions: TokenPrediction[];
   new_allocation: Record<string, number>;
+}
+
+// Swap history interface
+interface SwapHistoryItem {
+  name: string;
+  info: any;
+  content?: {
+    walletAddress: string;
+    swapId: string;
+    oldAllocation: Record<string, number>;
+    newAllocation: Record<string, number>;
+    strategy: string;
+    timestamp: string;
+  };
+  downloadError?: string;
 }
 
 // Custom circular progress component
@@ -169,6 +186,9 @@ export default function Dashboard() {
   const [aiError, setAiError] = useState<string | null>(null)
   const [strategies, setStrategies] = useState<any[]>([])
   const [isLoadingStrategies, setIsLoadingStrategies] = useState(false)
+  const [swapHistory, setSwapHistory] = useState<SwapHistoryItem[]>([])
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   
   const { data: session, status } = useSession()
   const router = useRouter()
@@ -545,7 +565,28 @@ export default function Dashboard() {
             setRebalanceStep(RebalanceStep.SecondSwap);
           } else {
             setRebalanceStep(RebalanceStep.Completed);
-            setShowSuccess(true);
+            
+            // Store swap log after successful rebalancing and wait for API response
+            if (portfolio && rebalanceData) {
+              const oldAllocation = portfolio.allocation.reduce((acc, token) => {
+                acc[token.symbol] = token.percentage;
+                return acc;
+              }, {} as Record<string, number>);
+
+              const newAllocation = Object.entries(rebalanceData.targetUsdValues).reduce((acc, [symbol, targetUsd]) => {
+                acc[symbol] = (targetUsd / rebalanceData.totalUsdValue) * 100;
+                return acc;
+              }, {} as Record<string, number>);
+
+              // Only show success if log storage succeeds
+              const logStored = await storeSwapLog(oldAllocation, newAllocation);
+              if (logStored) {
+                setShowSuccess(true);
+              }
+            } else {
+              // If no portfolio data, still show success for the swap itself
+              setShowSuccess(true);
+            }
             
             // Refresh portfolio data after a successful rebalance
             setTimeout(() => {
@@ -747,6 +788,21 @@ export default function Dashboard() {
           setRebalanceStep(RebalanceStep.Completed);
           setShowSuccess(true);
           
+          // Store swap log after successful rebalancing
+          if (portfolio && rebalanceData) {
+            const oldAllocation = portfolio.allocation.reduce((acc, token) => {
+              acc[token.symbol] = token.percentage;
+              return acc;
+            }, {} as Record<string, number>);
+
+            const newAllocation = Object.entries(rebalanceData.targetUsdValues).reduce((acc, [symbol, targetUsd]) => {
+              acc[symbol] = (targetUsd / rebalanceData.totalUsdValue) * 100;
+              return acc;
+            }, {} as Record<string, number>);
+
+            storeSwapLog(oldAllocation, newAllocation);
+          }
+          
           // Refresh portfolio data after a successful rebalance
           setTimeout(() => {
             if (session?.user?.walletAddress) {
@@ -892,6 +948,140 @@ export default function Dashboard() {
       fetchAIPredictions(selectedStrategy);
     }
   }, [portfolio]); // Only depend on portfolio changes, not selectedStrategy
+
+  // Fetch swap history when session is available
+  useEffect(() => {
+    if (status === "authenticated" && session?.user?.walletAddress) {
+      fetchSwapHistory();
+    }
+  }, [status, session?.user?.walletAddress]);
+
+  // Function to store swap log after successful rebalancing
+  const storeSwapLog = async (oldAllocation: Record<string, number>, newAllocation: Record<string, number>): Promise<boolean> => {
+    if (!session?.user?.walletAddress) return false;
+
+    try {
+      const swapData = {
+        walletAddress: session.user.walletAddress,
+        oldAllocation,
+        newAllocation,
+        strategy: selectedStrategy,
+        timestamp: new Date().toISOString()
+      };
+
+      const response = await fetch("/api/store-logs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ swapData }),
+      });
+
+      const result = await response.json();
+      
+      if (response.ok && result.success) {
+        console.log("Swap log stored successfully:", result.storedObjectName);
+        // Refresh swap history after storing new log
+        fetchSwapHistory();
+        return true;
+      } else {
+        console.error("Failed to store swap log:", result.error);
+        setTransactionError(`Swap completed but failed to store log: ${result.error}`);
+        return false;
+      }
+    } catch (error) {
+      console.error("Error storing swap log:", error);
+      setTransactionError(`Swap completed but failed to store log: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  };
+
+  // Function to fetch swap history
+  const fetchSwapHistory = async () => {
+    if (!session?.user?.walletAddress) return;
+
+    setIsLoadingHistory(true);
+    setHistoryError(null);
+
+    try {
+      const response = await fetch("/api/store-logs");
+      const result = await response.json();
+
+      if (result.success && result.bucket?.objects?.body?.GfSpListObjectsByBucketNameResponse?.Objects) {
+        const objects = result.bucket.objects.body.GfSpListObjectsByBucketNameResponse.Objects;
+        
+        // Fetch content for each object
+        const historyPromises = objects.map(async (obj: any) => {
+          try {
+            const contentResponse = await fetch(`/api/store-logs?objectName=${obj.ObjectInfo.ObjectName}`);
+            const contentResult = await contentResponse.json();
+            
+            return {
+              name: obj.ObjectInfo.ObjectName,
+              info: obj.ObjectInfo,
+              content: contentResult.object?.content,
+              downloadError: contentResult.object?.downloadError
+            };
+          } catch (error) {
+            return {
+              name: obj.ObjectInfo.ObjectName,
+              info: obj.ObjectInfo,
+              downloadError: `Failed to fetch content: ${error}`
+            };
+          }
+        });
+
+        const historyData = await Promise.all(historyPromises);
+        
+        // Filter only swap logs and sort by timestamp (newest first)
+        const swapLogs = historyData
+          .filter(item => item.name.includes(`${session.user.walletAddress?.toLowerCase()}-logs`) && item.content)
+          .sort((a, b) => {
+            const timeA = a.content?.timestamp ? new Date(a.content.timestamp).getTime() : 0;
+            const timeB = b.content?.timestamp ? new Date(b.content.timestamp).getTime() : 0;
+            return timeB - timeA;
+          });
+
+        setSwapHistory(swapLogs);
+      } else {
+        setHistoryError("No swap history found");
+      }
+    } catch (error) {
+      setHistoryError(`Failed to fetch swap history: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  // Function to download object as JSON file
+  const downloadObjectAsJson = async (objectName: string) => {
+    try {
+      const response = await fetch(`/api/store-logs?objectName=${objectName}`);
+      const result = await response.json();
+      
+      if (result.success && result.object?.content) {
+        // Create a blob with the JSON content
+        const jsonContent = JSON.stringify(result.object.content, null, 2);
+        const blob = new Blob([jsonContent], { type: 'application/json' });
+        
+        // Create download link
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = objectName;
+        document.body.appendChild(link);
+        link.click();
+        
+        // Cleanup
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+      } else {
+        console.error('Failed to fetch object content for download');
+      }
+    } catch (error) {
+      console.error('Error downloading object:', error);
+    }
+  };
 
   if (status === "loading") {
     return (
@@ -1558,6 +1748,170 @@ export default function Dashboard() {
             <CardFooter className="bg-gray-800/80 border-t border-gray-700">
               <div className="text-xs text-gray-400 text-center w-full">
                 {isProcessing ? "Processing transaction..." : "Estimated gas fee: 0.0012 BNB (~$0.50)"}
+              </div>
+            </CardFooter>
+          </Card>
+        </section>
+
+        {/* Swap History Section */}
+        <section className="space-y-6 pb-8">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-bold flex items-center">
+              <History className="w-6 h-6 mr-2" />
+              Swap History
+            </h2>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={fetchSwapHistory}
+              disabled={isLoadingHistory}
+              className="flex items-center gap-2"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoadingHistory ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
+          
+          <Card className="bg-gray-800/50 border-gray-700 backdrop-blur-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg">Portfolio Rebalancing History</CardTitle>
+              <CardDescription>Your transaction history stored on BNB Greenfield</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {isLoadingHistory ? (
+                <div className="flex justify-center py-8">
+                  <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin" />
+                </div>
+              ) : historyError ? (
+                <div className="bg-gray-700/30 p-6 rounded-lg border border-gray-600 text-center">
+                  <AlertCircle className="w-8 h-8 text-amber-400 mx-auto mb-2" />
+                  <p className="text-amber-300">{historyError}</p>
+                </div>
+              ) : swapHistory.length > 0 ? (
+                <div className="space-y-4">
+                  {swapHistory.map((swap, index) => (
+                    <div key={swap.name} className="bg-gray-700/30 rounded-lg p-4 border border-gray-600">
+                      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between mb-2">
+                            <h3 className="font-medium text-lg">
+                              {swap.content?.strategy || 'Unknown'} Strategy Rebalance
+                            </h3>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="bg-cyan-500/10 text-cyan-300 border-cyan-500/20">
+                                #{index + 1}
+                              </Badge>
+                            </div>
+                          </div>
+                          
+                          {swap.content && (
+                            <>
+                              <div className="text-sm text-gray-400 mb-3">
+                                <span>Timestamp: </span>
+                                <span>{new Date(swap.content.timestamp).toLocaleString()}</span>
+                                <span className="mx-2">|</span>
+                                <span>Swap ID: </span>
+                                <span className="font-mono text-xs">{swap.content.swapId}</span>
+                              </div>
+                              
+                              {/* Object Name and Download */}
+                              <div className="text-sm text-gray-400 mb-3 flex items-center justify-between">
+                                <div className="flex items-center">
+                                  <span>Object: </span>
+                                  <button
+                                    onClick={() => downloadObjectAsJson(swap.name)}
+                                    className="font-mono text-xs text-cyan-400 hover:text-cyan-300 underline ml-1 flex items-center"
+                                  >
+                                    {swap.name}
+                                    <Download className="w-3 h-3 ml-1" />
+                                  </button>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => downloadObjectAsJson(swap.name)}
+                                    className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1 text-xs"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    Download JSON
+                                  </button>
+                                  <a 
+                                    href={`/api/store-logs?objectName=${swap.name}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1 text-xs"
+                                  >
+                                    <ExternalLink className="w-3 h-3" />
+                                    View Raw
+                                  </a>
+                                </div>
+                              </div>
+                              
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {/* Old Allocation */}
+                                <div className="space-y-2">
+                                  <h4 className="text-sm font-medium text-gray-300">Previous Allocation</h4>
+                                  <div className="space-y-1">
+                                    {Object.entries(swap.content.oldAllocation).map(([token, percentage]) => (
+                                      <div key={token} className="flex items-center justify-between text-sm">
+                                        <div className="flex items-center">
+                                          <div 
+                                            className="w-3 h-3 rounded-full mr-2" 
+                                            style={{ backgroundColor: TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR }}
+                                          ></div>
+                                          <span>{token}</span>
+                                        </div>
+                                        <span>{Number(percentage).toFixed(2)}%</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                                
+                                {/* New Allocation */}
+                                <div className="space-y-2">
+                                  <h4 className="text-sm font-medium text-gray-300">New Allocation</h4>
+                                  <div className="space-y-1">
+                                    {Object.entries(swap.content.newAllocation).map(([token, percentage]) => (
+                                      <div key={token} className="flex items-center justify-between text-sm">
+                                        <div className="flex items-center">
+                                          <div 
+                                            className="w-3 h-3 rounded-full mr-2" 
+                                            style={{ backgroundColor: TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR }}
+                                          ></div>
+                                          <span>{token}</span>
+                                        </div>
+                                        <span className="text-green-400">{Number(percentage).toFixed(2)}%</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            </>
+                          )}
+                          
+                          {swap.downloadError && (
+                            <div className="text-xs text-amber-400 mt-2">
+                              <AlertCircle className="w-3 h-3 inline mr-1" />
+                              {swap.downloadError}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-gray-700/30 p-6 rounded-lg border border-gray-600 text-center">
+                  <History className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                  <p>No swap history found</p>
+                  <p className="text-sm text-gray-400 mt-2">
+                    Complete a rebalancing to see your transaction history here
+                  </p>
+                </div>
+              )}
+            </CardContent>
+            <CardFooter className="bg-gray-800/80 border-t border-gray-700">
+              <div className="text-xs text-gray-400 text-center w-full">
+                Data stored securely on BNB Greenfield decentralized storage
               </div>
             </CardFooter>
           </Card>

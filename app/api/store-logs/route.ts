@@ -236,117 +236,89 @@ export async function POST(req: Request) {
     // Create object info from actual swap data
     const objectInfo = {
       walletAddress: address,
-      swapId: `${address.toLowerCase()}-log${logNumber}`,
+      swapId: `${address.toLowerCase()}-logs${logNumber}`,
       oldAllocation: data.swapData.oldAllocation || {},
       newAllocation: data.swapData.newAllocation || {},
       strategy: data.swapData.strategy || "Balanced",
       timestamp: data.swapData.timestamp || new Date().toISOString()
     };
     
-    // Create bucket transaction
-    const createBucketTx = await client.bucket.createBucket({
-      bucketName: "my-rebalance-logs3",
-      creator: address,
-      visibility: 1, // VISIBILITY_TYPE_PUBLIC_READ
-      chargedReadQuota: Long.fromString("0"),
-      primarySpAddress: primarySp.operatorAddress,
-      paymentAddress: address,
-    });
-
-    const simulateInfo = await createBucketTx.simulate({
-      denom: "BNB",
-    });
-
-    let broadcastResult = null;
+    // Skip bucket creation - use existing bucket "my-rebalance-logs3"
+    const bucketName = "my-rebalance-logs3";
+    
     let objectResult = null;
 
-    // Only attempt broadcast if private key is provided
+    // Only attempt object creation if private key is provided
     if (privateKey) {
       try {
-        // Broadcast the bucket creation transaction
-        const broadcastRes = await createBucketTx.broadcast({
+        const objectData = JSON.stringify(objectInfo, null, 2); // Pretty print JSON
+        const objectBuffer = new TextEncoder().encode(objectData);
+        
+        // Calculate Reed-Solomon checksums
+        const rs = new ReedSolomon();
+        const expectCheckSums = rs.encode(objectBuffer);
+        
+        const objectName = `${address.toLowerCase()}-logs${logNumber}.json`;
+        
+        const createObjectTx = await client.object.createObject({
+          bucketName: bucketName,
+          objectName: objectName,
+          creator: address,
+          visibility: 1,
+          contentType: 'application/json',
+          redundancyType: 0, // REDUNDANCY_EC_TYPE
+          payloadSize: Long.fromInt(objectBuffer.length),
+          expectChecksums: expectCheckSums.map((checksum: string) => 
+            Uint8Array.from(Buffer.from(checksum, 'base64'))
+          ),
+        });
+        
+        const objectSimulate = await createObjectTx.simulate({
           denom: "BNB",
-          gasLimit: Number(simulateInfo.gasLimit),
-          gasPrice: simulateInfo.gasPrice,
+        });
+        
+        const objectBroadcast = await createObjectTx.broadcast({
+          denom: "BNB",
+          gasLimit: Number(objectSimulate.gasLimit),
+          gasPrice: objectSimulate.gasPrice,
           payer: address,
           granter: '',
           privateKey: privateKey
         });
+        
+        objectResult = serializeBigInt(objectBroadcast);
 
-        broadcastResult = serializeBigInt(broadcastRes);
-
-        // If bucket creation was successful, create the object
-        if (broadcastRes.code === 0) {
-          const objectData = JSON.stringify(objectInfo, null, 2); // Pretty print JSON
-          const objectBuffer = new TextEncoder().encode(objectData);
-          
-          // Calculate Reed-Solomon checksums
-          const rs = new ReedSolomon();
-          const expectCheckSums = rs.encode(objectBuffer);
-          
-          const objectName = `${address.toLowerCase()}-log${logNumber}.json`;
-          
-          const createObjectTx = await client.object.createObject({
-            bucketName: "my-rebalance-logs3",
-            objectName: objectName,
-            creator: address,
-            visibility: 1,
-            contentType: 'application/json',
-            redundancyType: 0, // REDUNDANCY_EC_TYPE
-            payloadSize: Long.fromInt(objectBuffer.length),
-            expectChecksums: expectCheckSums.map((checksum: string) => 
-              Uint8Array.from(Buffer.from(checksum, 'base64'))
-            ),
-          });
-          
-          const objectSimulate = await createObjectTx.simulate({
-            denom: "BNB",
-          });
-          
-          const objectBroadcast = await createObjectTx.broadcast({
-            denom: "BNB",
-            gasLimit: Number(objectSimulate.gasLimit),
-            gasPrice: objectSimulate.gasPrice,
-            payer: address,
-            granter: '',
-            privateKey: privateKey
-          });
-          
-          objectResult = serializeBigInt(objectBroadcast);
-
-          // If object creation was successful, upload the actual data
-          if (objectBroadcast.code === 0) {
-            try {
-              const uploadRes = await client.object.uploadObject(
-                {
-                  bucketName: "my-rebalance-logs3",
-                  objectName: objectName,
-                  body: {
-                    name: objectName,
-                    type: 'application/json',
-                    size: objectBuffer.length,
-                    content: Buffer.from(objectBuffer),
-                  },
-                  txnHash: objectBroadcast.transactionHash,
+        // If object creation was successful, upload the actual data
+        if (objectBroadcast.code === 0) {
+          try {
+            const uploadRes = await client.object.uploadObject(
+              {
+                bucketName: bucketName,
+                objectName: objectName,
+                body: {
+                  name: objectName,
+                  type: 'application/json',
+                  size: objectBuffer.length,
+                  content: Buffer.from(objectBuffer),
                 },
-                {
-                  type: 'ECDSA',
-                  privateKey: privateKey,
-                }
-              );
-              objectResult.uploadStatus = uploadRes;
-              objectResult.objectName = objectName;
-            } catch (uploadError: any) {
-              objectResult.uploadError = uploadError.message;
-            }
+                txnHash: objectBroadcast.transactionHash,
+              },
+              {
+                type: 'ECDSA',
+                privateKey: privateKey,
+              }
+            );
+            objectResult.uploadStatus = uploadRes;
+            objectResult.objectName = objectName;
+          } catch (uploadError: any) {
+            objectResult.uploadError = uploadError.message;
           }
         }
-      } catch (broadcastError: any) {
+      } catch (objectError: any) {
         return new Response(JSON.stringify({ 
           success: false, 
-          error: `Broadcast failed: ${broadcastError.message}`,
-          simulationSuccess: true,
-          gasEstimate: serializeBigInt(simulateInfo)
+          error: `Object creation failed: ${objectError.message}`,
+          swapData: objectInfo
         }), {
           status: 400,
           headers: { "Content-Type": "application/json" }
@@ -358,8 +330,6 @@ export async function POST(req: Request) {
       success: true,
       message: "Swap data stored in Greenfield successfully",
       swapData: objectInfo,
-      gasEstimate: serializeBigInt(simulateInfo),
-      bucketTransaction: broadcastResult,
       objectTransaction: objectResult,
       storedObjectName: objectResult?.objectName || null,
       logNumber: logNumber
