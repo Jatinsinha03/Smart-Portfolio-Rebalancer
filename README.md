@@ -1,6 +1,6 @@
 # Smart Portfolio Rebalancer
 
-An AI-powered decentralized portfolio management platform built on BNB Smart Chain that automatically rebalances your crypto portfolio based on machine learning predictions and customizable investment strategies.
+An AI-powered decentralized portfolio management platform built on BNB Smart Chain that automatically rebalances your crypto portfolio based on machine learning predictions and customizable investment strategies. [Video Link](https://youtu.be/yCWwugJzUe4)
 
 ## 🌟 Features
 
@@ -82,7 +82,7 @@ An AI-powered decentralized portfolio management platform built on BNB Smart Cha
 - **Python**: Core AI processing
 - **pypfopt**: Modern Portfolio Theory implementation
 - **NumPy/Pandas**: Data manipulation (implied)
-- **Custom prediction algorithms**: 7-day return forecasting
+- **Custom prediction algorithms**: 7-day return forecasting using XGboost
 
 ### **Decentralized Storage**
 - **BNB Greenfield**: Decentralized object storage
