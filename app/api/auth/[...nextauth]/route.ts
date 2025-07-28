@@ -21,19 +21,23 @@ const handler = NextAuth({
         }
 
         await dbConnect();
-        
+
         const user = await UserRebalancer.findOne({ email: credentials.email });
-        
+
         if (!user) {
           throw new Error('No user found with this email');
         }
-        
+
         const isPasswordMatch = await compare(credentials.password, user.password);
-        
+
         if (!isPasswordMatch) {
           throw new Error('Incorrect password');
         }
-        
+
+        // ✅ Update lastActiveAt on successful login
+        user.lastActiveAt = new Date();
+        await user.save();
+
         return {
           id: user._id.toString(),
           email: user.email,
@@ -70,4 +74,4 @@ const handler = NextAuth({
   },
 });
 
-export { handler as GET, handler as POST }; 
+export { handler as GET, handler as POST };
