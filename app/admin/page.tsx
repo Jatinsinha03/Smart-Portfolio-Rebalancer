@@ -3,7 +3,7 @@
 import { useSearchParams } from 'next/navigation';
 import dbConnect from '@/lib/dbConnect';
 import UserRebalancer from '@/lib/models/user';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 
 type AdminStats = {
   totalUsers: number;
@@ -11,7 +11,7 @@ type AdminStats = {
   dauCount: number;
 };
 
-export default function Admin() {
+function AdminContent() {
   const searchParams = useSearchParams();
   const team = searchParams.get('team');
 
@@ -88,5 +88,17 @@ export default function Admin() {
         📅 <strong>Daily Active Users (DAU):</strong> {stats.dauCount}
       </div>
     </div>
+  );
+}
+
+export default function Admin() {
+  return (
+    <Suspense fallback={
+      <div style={{ padding: '2rem', fontFamily: 'sans-serif', fontSize: '1.5rem' }}>
+        ⏳ Loading...
+      </div>
+    }>
+      <AdminContent />
+    </Suspense>
   );
 }
