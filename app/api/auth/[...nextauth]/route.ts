@@ -1,4 +1,4 @@
-import NextAuth from 'next-auth';
+import NextAuth, { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { MongoDBAdapter } from '@auth/mongodb-adapter';
 import clientPromise from '@/lib/mongodb';
@@ -6,7 +6,35 @@ import dbConnect from '@/lib/dbConnect';
 import UserRebalancer from '@/lib/models/user';
 import { compare } from 'bcrypt';
 
-const handler = NextAuth({
+// Extend the built-in session types
+declare module "next-auth" {
+  interface Session {
+    user: {
+      id: string;
+      email: string;
+      name?: string | null;
+      image?: string | null;
+      walletAddress?: string | null;
+    }
+  }
+  
+  interface User {
+    id: string;
+    email: string;
+    name?: string | null;
+    image?: string | null;
+    walletAddress?: string | null;
+  }
+}
+
+declare module "next-auth/jwt" {
+  interface JWT {
+    id: string;
+    walletAddress?: string | null;
+  }
+}
+
+const authOptions: NextAuthOptions = {
   adapter: MongoDBAdapter(clientPromise),
   providers: [
     CredentialsProvider({
@@ -66,12 +94,20 @@ const handler = NextAuth({
       }
       return session;
     },
+    async redirect({ url, baseUrl }) {
+      // Handle custom redirects if needed
+      if (url.startsWith('/auth/signup')) {
+        return `${baseUrl}/auth/signup`;
+      }
+      return url;
+    },
   },
   pages: {
     signIn: '/auth/login',
-    signUp: '/auth/signup',
     error: '/auth/error',
   },
-});
+};
+
+const handler = NextAuth(authOptions);
 
 export { handler as GET, handler as POST };
