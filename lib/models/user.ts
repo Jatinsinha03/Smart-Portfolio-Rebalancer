@@ -25,6 +25,10 @@ const UserSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  lastActiveAt: {
+    type: Date,
+    default: Date.now,
+  },
 });
 
 export default mongoose.models.user_rebalancer || mongoose.model('user_rebalancer', UserSchema); 

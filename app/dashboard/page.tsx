@@ -29,22 +29,21 @@ import { useRouter } from "next/navigation"
 import { ethers } from "ethers"
 import axios from "axios"
 
-// SimpleSwap Contract ABI - abbreviated version for the functions we need
-const SIMPLE_SWAP_ABI = [
-  "function swap(address _fromTokenAddress, address _toTokenAddress, uint256 _amount) public returns (bool)",
-  "function withdrawTokens(address _tokenAddress, uint256 _amount) public returns (bool)",
-  "function tokenData(address token) public view returns (address token, uint256 rate, bool exists)",
-  "function isTokenSupported(address _tokenAddress) public view returns (bool)"
+// AgentSwap Contract ABI - imported from data/abi.json
+const AGENT_SWAP_ABI = [
+  "function swapTokenForToken(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin, address to) public",
+  "function swapTokenForBnb(address tokenIn, uint256 amountIn, uint256 amountOutMin, address to) public",
+  "function swapBnbForToken(address tokenOut, uint256 amountOutMin, address to) public payable"
 ];
 
-// Contract address for SimpleSwap - replace with actual contract address when deployed
-const SIMPLE_SWAP_ADDRESS = "0xE91866063d5DA85cff082B73a5F93B5d7f334412";
+// Contract address for AgentSwap - replace with actual contract address when deployed
+const AGENT_SWAP_ADDRESS = "0x8f34751023D140C75A62B0809dB3E04c8F59428c";
 
 // Token addresses (match the ones in the API)
 const TOKEN_ADDRESSES = {
-  "BUSD": "0xaB1a4d4f1D656d2450692D237fdD6C7f9146e814",
-  "WBNB": "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd",
-  "CAKE": "0xFa60D973F7642B748046464e165A65B7323b0DEE"
+  "BUSD": "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56",
+  "WBNB": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+  "CAKE": "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82"
 };
 
 // Token color scheme
@@ -253,38 +252,32 @@ export default function Dashboard() {
   // Add a function to fetch AI strategies
   const fetchAIStrategies = async () => {
     setIsLoadingStrategies(true);
-    try {
-      const response = await axios.get("/api/ai-prediction");
-      if (response.data && response.data.strategies) {
-        setStrategies(response.data.strategies);
-      }
-    } catch (err) {
-      console.error("Error fetching AI strategies:", err);
-      // Fall back to default strategies if API fails
-      setStrategies([
-        {
-          id: "growth",
-          name: "Growth",
-          description: "Higher risk, higher potential returns",
-          allocation: { WBNB: 60, BUSD: 20, CAKE: 20 },
-        },
-        {
-          id: "balanced",
-          name: "Balanced",
-          description: "Moderate risk and returns",
-          allocation: { WBNB: 40, BUSD: 40, CAKE: 20 },
-        },
-        {
-          id: "conservative",
-          name: "Conservative",
-          description: "Lower risk, stable returns",
-          allocation: { WBNB: 20, BUSD: 60, CAKE: 20 },
-        },
-      ]);
-    } finally {
-      setIsLoadingStrategies(false);
-    }
+    
+    // Directly set default strategies
+    setStrategies([
+      {
+        id: "growth",
+        name: "Growth",
+        description: "Higher risk, higher potential returns",
+        allocation: { WBNB: 60, BUSD: 20, CAKE: 20 },
+      },
+      {
+        id: "balanced",
+        name: "Balanced",
+        description: "Moderate risk and returns",
+        allocation: { WBNB: 40, BUSD: 40, CAKE: 20 },
+      },
+      {
+        id: "conservative",
+        name: "Conservative",
+        description: "Lower risk, stable returns",
+        allocation: { WBNB: 20, BUSD: 60, CAKE: 20 },
+      },
+    ]);
+  
+    setIsLoadingStrategies(false);
   };
+  
 
   // Fetch strategies when the component mounts
   useEffect(() => {
@@ -415,9 +408,8 @@ export default function Dashboard() {
   // Add function to check if token is supported before swapping
   const checkTokenSupport = async (provider: ethers.BrowserProvider, tokenAddress: string) => {
     try {
-      const contract = new ethers.Contract(SIMPLE_SWAP_ADDRESS, SIMPLE_SWAP_ABI, provider);
-      // Add method to check if token is supported - this depends on your contract's implementation
-      // For now, we'll just return true and let the contract handle errors
+      const contract = new ethers.Contract(AGENT_SWAP_ADDRESS, AGENT_SWAP_ABI, provider);
+      // For AgentSwap contract, we'll assume tokens are supported and let the contract handle errors
       return true;
     } catch (error) {
       console.error("Error checking token support:", error);
@@ -460,7 +452,7 @@ export default function Dashboard() {
       console.log(`Attempting to swap ${firstSwap.fromToken} (${fromToken}) to ${firstSwap.toToken} (${toToken})`);
       
       // Try to create a contract instance
-      const contract = new ethers.Contract(SIMPLE_SWAP_ADDRESS, SIMPLE_SWAP_ABI, signer);
+      const contract = new ethers.Contract(AGENT_SWAP_ADDRESS, AGENT_SWAP_ABI, signer);
       
       // Convert amount to Wei
       const amount = ethers.parseUnits(firstSwap.fromTokenAmount.toFixed(18), 18);
@@ -481,7 +473,7 @@ export default function Dashboard() {
         try {
           const userAddress = await signer.getAddress();
           console.log(`Checking allowance for ${userAddress} to spend ${firstSwap.fromToken}`);
-          const currentAllowance = await tokenContract.allowance(userAddress, SIMPLE_SWAP_ADDRESS);
+          const currentAllowance = await tokenContract.allowance(userAddress, AGENT_SWAP_ADDRESS);
           console.log(`Current allowance: ${currentAllowance.toString()}`);
           needsApproval = currentAllowance < amount;
         } catch (allowanceError) {
@@ -491,10 +483,10 @@ export default function Dashboard() {
         
         // Always approve for CAKE token due to potential issues with allowance checks
         if (needsApproval || firstSwap.fromToken === "CAKE") {
-          console.log(`Approving ${SIMPLE_SWAP_ADDRESS} to spend ${firstSwap.fromToken}`);
+          console.log(`Approving ${AGENT_SWAP_ADDRESS} to spend ${firstSwap.fromToken}`);
           // Set a very large approval amount to avoid future issues
           const maxApproval = ethers.parseUnits("999999999", 18);
-          const approveTx = await tokenContract.approve(SIMPLE_SWAP_ADDRESS, maxApproval);
+          const approveTx = await tokenContract.approve(AGENT_SWAP_ADDRESS, maxApproval);
           await approveTx.wait();
           console.log("Approval successful");
         } else {
@@ -505,142 +497,120 @@ export default function Dashboard() {
         throw new Error(`Failed to approve ${firstSwap.fromToken} for swap: ${approvalError instanceof Error ? approvalError.message : String(approvalError)}`);
       }
       
-      // Execute the swap
+      // Execute the swap using swapTokenForToken
+      const userAddress = await signer.getAddress();
       console.log(`Swapping ${amount.toString()} of ${firstSwap.fromToken} to ${firstSwap.toToken}`);
       console.log('=========== SWAP FUNCTION PARAMETERS ===========');
-      console.log(`fromToken address: ${fromToken}`);
-      console.log(`toToken address: ${toToken}`);
-      console.log(`amount (Wei): ${amount.toString()}`);
-      console.log(`amount (decimal): ${ethers.formatUnits(amount, 18)}`);
+      console.log(`tokenIn address: ${fromToken}`);
+      console.log(`tokenOut address: ${toToken}`);
+      console.log(`amountIn (Wei): ${amount.toString()}`);
+      console.log(`amountIn (decimal): ${ethers.formatUnits(amount, 18)}`);
+      console.log(`amountOutMin: 0`);
+      console.log(`to address: ${userAddress}`);
       console.log(`gas limit: 500000`);
-      console.log(`contract address: ${SIMPLE_SWAP_ADDRESS}`);
-      console.log(`caller address: ${await signer.getAddress()}`);
+      console.log(`contract address: ${AGENT_SWAP_ADDRESS}`);
+      console.log(`caller address: ${userAddress}`);
       console.log('===============================================');
       
-      // Check if tokens are supported
       try {
-        // Direct method to check if tokens are supported
-        console.log(`Checking if ${firstSwap.fromToken} is supported...`);
-        let isFromTokenSupported = true;
-        try {
-          isFromTokenSupported = await contract.isTokenSupported(fromToken);
-          console.log(`Is ${firstSwap.fromToken} supported? ${isFromTokenSupported}`);
-        } catch (err) {
-          console.log(`Could not check if ${firstSwap.fromToken} is supported, assuming it is:`, err);
-        }
+        console.log(`Sending swapTokenForToken transaction with parameters:
+          - tokenIn: ${fromToken}
+          - tokenOut: ${toToken}
+          - amountIn: ${amount.toString()}
+          - amountOutMin: 0
+          - to: ${userAddress}
+        `);
+        
+        // Set a high gas limit manually instead of estimating
+        const tx = await contract.swapTokenForToken(fromToken, toToken, amount, 0, userAddress, {
+          gasLimit: 500000 // Set a high fixed gas limit
+        });
+          
+        console.log(`Transaction sent: ${tx.hash}`);
+        console.log(`Waiting for transaction confirmation...`);
+        
+        await tx.wait();
+        console.log(`Transaction confirmed!`);
+        
+        setTransactionHash(prev => ({ ...prev, firstSwap: tx.hash }));
+        setStepStatus(prev => ({ ...prev, firstSwap: true }));
+        
+        // If there's a second swap, move to that step, otherwise mark as completed
+        if (rebalanceData && rebalanceData.swaps.length > 1) {
+          setRebalanceStep(RebalanceStep.SecondSwap);
+        } else {
+          setRebalanceStep(RebalanceStep.Completed);
+          
+          // Store swap log after successful rebalancing and wait for API response
+          if (portfolio && rebalanceData) {
+            const oldAllocation = portfolio.allocation.reduce((acc, token) => {
+              acc[token.symbol] = token.percentage;
+              return acc;
+            }, {} as Record<string, number>);
 
-        console.log(`Checking if ${firstSwap.toToken} is supported...`);
-        let isToTokenSupported = true;
-        try {
-          isToTokenSupported = await contract.isTokenSupported(toToken);
-          console.log(`Is ${firstSwap.toToken} supported? ${isToTokenSupported}`);
-        } catch (err) {
-          console.log(`Could not check if ${firstSwap.toToken} is supported, assuming it is:`, err);
-        }
+            const newAllocation = Object.entries(rebalanceData.targetUsdValues).reduce((acc, [symbol, targetUsd]) => {
+              acc[symbol] = (targetUsd / rebalanceData.totalUsdValue) * 100;
+              return acc;
+            }, {} as Record<string, number>);
 
-        // Try with more direct approach, bypassing gas estimation
-        try {
-          console.log(`Sending swap transaction with parameters:
-            - fromToken: ${fromToken}
-            - toToken: ${toToken}
-            - amount: ${amount.toString()}
-          `);
-          
-          // Set a high gas limit manually instead of estimating
-          const tx = await contract.swap(fromToken, toToken, amount, {
-            gasLimit: 500000 // Set a high fixed gas limit
-          });
-          
-          console.log(`Transaction sent: ${tx.hash}`);
-          console.log(`Waiting for transaction confirmation...`);
-          
-          await tx.wait();
-          console.log(`Transaction confirmed!`);
-          
-          setTransactionHash(prev => ({ ...prev, firstSwap: tx.hash }));
-          setStepStatus(prev => ({ ...prev, firstSwap: true }));
-          
-          // If there's a second swap, move to that step, otherwise mark as completed
-          if (rebalanceData && rebalanceData.swaps.length > 1) {
-            setRebalanceStep(RebalanceStep.SecondSwap);
-          } else {
-            setRebalanceStep(RebalanceStep.Completed);
-            
-            // Store swap log after successful rebalancing and wait for API response
-            if (portfolio && rebalanceData) {
-              const oldAllocation = portfolio.allocation.reduce((acc, token) => {
-                acc[token.symbol] = token.percentage;
-                return acc;
-              }, {} as Record<string, number>);
-
-              const newAllocation = Object.entries(rebalanceData.targetUsdValues).reduce((acc, [symbol, targetUsd]) => {
-                acc[symbol] = (targetUsd / rebalanceData.totalUsdValue) * 100;
-                return acc;
-              }, {} as Record<string, number>);
-
-              // Only show success if log storage succeeds
-              const logStored = await storeSwapLog(oldAllocation, newAllocation);
-              if (logStored) {
-                setShowSuccess(true);
-              }
-            } else {
-              // If no portfolio data, still show success for the swap itself
+            // Only show success if log storage succeeds
+            const logStored = await storeSwapLog(oldAllocation, newAllocation);
+            if (logStored) {
               setShowSuccess(true);
             }
-            
-            // Refresh portfolio data after a successful rebalance
-            setTimeout(() => {
-              if (session?.user?.walletAddress) {
-                fetch("/api/portfolio", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ walletAddress: session.user.walletAddress }),
-                }).then(response => {
-                  if (response.ok) return response.json();
-                  throw new Error("Failed to refresh portfolio");
-                }).then(data => {
-                  const allocationsWithColors = data.allocation.map((item: TokenAllocation) => ({
-                    ...item,
-                    color: TOKEN_COLORS[item.symbol as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR
-                  }));
-                  
-                  setPortfolio({
-                    ...data,
-                    allocation: allocationsWithColors
-                  });
-                }).catch(err => {
-                  console.error("Error refreshing portfolio:", err);
-                });
-              }
-            }, 2000);
-          }
-        } catch (directSwapError: any) {
-          // Log the full error object
-          console.error("Direct swap error:", JSON.stringify(directSwapError, null, 2));
-          
-          // Extract as much information as possible
-          const errorDetails = {
-            message: directSwapError.message || "Unknown error",
-            code: directSwapError.code,
-            reason: directSwapError.reason,
-            data: directSwapError.data,
-            transaction: directSwapError.transaction
-          };
-          
-          console.error("Error details:", errorDetails);
-          
-          if (directSwapError.reason && directSwapError.reason.includes("From-token not supported")) {
-            throw new Error(`Token ${firstSwap.fromToken} is not supported by the contract. Please try a different token or address.`);
-          } else if (directSwapError.reason && directSwapError.reason.includes("To-token not supported")) {
-            throw new Error(`Token ${firstSwap.toToken} is not supported by the contract. Please try a different token or address.`);
           } else {
-            throw new Error(`Swap failed: ${directSwapError.message || "Unknown error"}. Please check token addresses and try again.`);
+            // If no portfolio data, still show success for the swap itself
+            setShowSuccess(true);
           }
+          
+          // Refresh portfolio data after a successful rebalance
+          setTimeout(() => {
+            if (session?.user?.walletAddress) {
+              fetch("/api/portfolio", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ walletAddress: session.user.walletAddress }),
+              }).then(response => {
+                if (response.ok) return response.json();
+                throw new Error("Failed to refresh portfolio");
+              }).then(data => {
+                const allocationsWithColors = data.allocation.map((item: TokenAllocation) => ({
+                  ...item,
+                  color: TOKEN_COLORS[item.symbol as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR
+                }));
+                
+                setPortfolio({
+                  ...data,
+                  allocation: allocationsWithColors
+                });
+              }).catch(err => {
+                console.error("Error refreshing portfolio:", err);
+              });
+            }
+          }, 2000);
         }
-      } catch (swapError: any) {
-        // Re-throw the error with more context
-        console.error("Swap preparation error:", swapError);
-        throw swapError;
+      } catch (directSwapError: any) {
+        // Log the full error object
+        console.error("Direct swap error:", JSON.stringify(directSwapError, null, 2));
+        
+        // Extract as much information as possible
+        const errorDetails = {
+          message: directSwapError.message || "Unknown error",
+          code: directSwapError.code,
+          reason: directSwapError.reason,
+          data: directSwapError.data,
+          transaction: directSwapError.transaction
+        };
+        
+        console.error("Error details:", errorDetails);
+        
+        if (directSwapError.reason && directSwapError.reason.includes("From-token not supported")) {
+          throw new Error(`Token ${firstSwap.fromToken} is not supported by the contract. Please try a different token or address.`);
+        } else if (directSwapError.reason && directSwapError.reason.includes("To-token not supported")) {
+          throw new Error(`Token ${firstSwap.toToken} is not supported by the contract. Please try a different token or address.`);
+        } else {
+          throw new Error(`Swap failed: ${directSwapError.message || "Unknown error"}. Please check token addresses and try again.`);
+        }
       }
     } catch (err) {
       console.error("First swap error:", err);
@@ -686,7 +656,7 @@ export default function Dashboard() {
       console.log(`Attempting to swap ${secondSwap.fromToken} (${fromToken}) to ${secondSwap.toToken} (${toToken})`);
       
       // Try to create a contract instance
-      const contract = new ethers.Contract(SIMPLE_SWAP_ADDRESS, SIMPLE_SWAP_ABI, signer);
+      const contract = new ethers.Contract(AGENT_SWAP_ADDRESS, AGENT_SWAP_ABI, signer);
       
       // Convert amount to Wei
       const amount = ethers.parseUnits(secondSwap.fromTokenAmount.toFixed(18), 18);
@@ -707,7 +677,7 @@ export default function Dashboard() {
         try {
           const userAddress = await signer.getAddress();
           console.log(`Checking allowance for ${userAddress} to spend ${secondSwap.fromToken}`);
-          const currentAllowance = await tokenContract.allowance(userAddress, SIMPLE_SWAP_ADDRESS);
+          const currentAllowance = await tokenContract.allowance(userAddress, AGENT_SWAP_ADDRESS);
           console.log(`Current allowance: ${currentAllowance.toString()}`);
           needsApproval = currentAllowance < amount;
         } catch (allowanceError) {
@@ -717,10 +687,10 @@ export default function Dashboard() {
         
         // Always approve for CAKE token due to potential issues with allowance checks
         if (needsApproval || secondSwap.fromToken === "CAKE") {
-          console.log(`Approving ${SIMPLE_SWAP_ADDRESS} to spend ${secondSwap.fromToken}`);
+          console.log(`Approving ${AGENT_SWAP_ADDRESS} to spend ${secondSwap.fromToken}`);
           // Set a very large approval amount to avoid future issues
           const maxApproval = ethers.parseUnits("999999999", 18);
-          const approveTx = await tokenContract.approve(SIMPLE_SWAP_ADDRESS, maxApproval);
+          const approveTx = await tokenContract.approve(AGENT_SWAP_ADDRESS, maxApproval);
           await approveTx.wait();
           console.log("Approval successful");
         } else {
@@ -731,51 +701,34 @@ export default function Dashboard() {
         throw new Error(`Failed to approve ${secondSwap.fromToken} for swap: ${approvalError instanceof Error ? approvalError.message : String(approvalError)}`);
       }
       
-      // Execute the swap
+      // Execute the swap using swapTokenForToken
+      const userAddress = await signer.getAddress();
       console.log(`Swapping ${amount.toString()} of ${secondSwap.fromToken} to ${secondSwap.toToken}`);
       console.log('=========== SWAP FUNCTION PARAMETERS ===========');
-      console.log(`fromToken address: ${fromToken}`);
-      console.log(`toToken address: ${toToken}`);
-      console.log(`amount (Wei): ${amount.toString()}`);
-      console.log(`amount (decimal): ${ethers.formatUnits(amount, 18)}`);
+      console.log(`tokenIn address: ${fromToken}`);
+      console.log(`tokenOut address: ${toToken}`);
+      console.log(`amountIn (Wei): ${amount.toString()}`);
+      console.log(`amountIn (decimal): ${ethers.formatUnits(amount, 18)}`);
+      console.log(`amountOutMin: 0`);
+      console.log(`to address: ${userAddress}`);
       console.log(`gas limit: 500000`);
-      console.log(`contract address: ${SIMPLE_SWAP_ADDRESS}`);
-      console.log(`caller address: ${await signer.getAddress()}`);
+      console.log(`contract address: ${AGENT_SWAP_ADDRESS}`);
+      console.log(`caller address: ${userAddress}`);
       console.log('===============================================');
       
-      // Check if tokens are supported
       try {
-        // Direct method to check if tokens are supported
-        console.log(`Checking if ${secondSwap.fromToken} is supported...`);
-        let isFromTokenSupported = true;
-        try {
-          isFromTokenSupported = await contract.isTokenSupported(fromToken);
-          console.log(`Is ${secondSwap.fromToken} supported? ${isFromTokenSupported}`);
-        } catch (err) {
-          console.log(`Could not check if ${secondSwap.fromToken} is supported, assuming it is:`, err);
-        }
-
-        console.log(`Checking if ${secondSwap.toToken} is supported...`);
-        let isToTokenSupported = true;
-        try {
-          isToTokenSupported = await contract.isTokenSupported(toToken);
-          console.log(`Is ${secondSwap.toToken} supported? ${isToTokenSupported}`);
-        } catch (err) {
-          console.log(`Could not check if ${secondSwap.toToken} is supported, assuming it is:`, err);
-        }
-
-        // Try with more direct approach, bypassing gas estimation
-        try {
-          console.log(`Sending swap transaction with parameters:
-            - fromToken: ${fromToken}
-            - toToken: ${toToken}
-            - amount: ${amount.toString()}
-          `);
-          
-          // Set a high gas limit manually instead of estimating
-          const tx = await contract.swap(fromToken, toToken, amount, {
-            gasLimit: 500000 // Set a high fixed gas limit
-          });
+        console.log(`Sending swapTokenForToken transaction with parameters:
+          - tokenIn: ${fromToken}
+          - tokenOut: ${toToken}
+          - amountIn: ${amount.toString()}
+          - amountOutMin: 0
+          - to: ${userAddress}
+        `);
+        
+        // Set a high gas limit manually instead of estimating
+        const tx = await contract.swapTokenForToken(fromToken, toToken, amount, 0, userAddress, {
+          gasLimit: 500000 // Set a high fixed gas limit
+        });
           
           console.log(`Transaction sent: ${tx.hash}`);
           console.log(`Waiting for transaction confirmation...`);
@@ -851,11 +804,6 @@ export default function Dashboard() {
             throw new Error(`Swap failed: ${directSwapError.message || "Unknown error"}. Please check token addresses and try again.`);
           }
         }
-      } catch (swapError: any) {
-        // Re-throw the error with more context
-        console.error("Swap preparation error:", swapError);
-        throw swapError;
-      }
     } catch (err) {
       console.error("Second swap error:", err);
       setTransactionError(err instanceof Error ? err.message : `Failed to swap ${secondSwap.fromToken} to ${secondSwap.toToken}`);
@@ -878,9 +826,9 @@ export default function Dashboard() {
 
   // Format wallet address for display
   const formatWalletAddress = (address: string | null | undefined) => {
-    if (!address) return null
-    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`
-  }
+    if (!address) return null;
+    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
+  };
 
   // Compute the rebalance preview
   const rebalancePreview = calculateRebalanceAmounts();
@@ -907,9 +855,12 @@ export default function Dashboard() {
         allocation: currentAllocation,
         strategy: specificStrategy
       });
+      console.log("response", response.data);
 
       setAiPredictions(response.data.predictions);
       setAiAllocation(response.data.new_allocation);
+      console.log("new_allocation (from response):", response.data.new_allocation);
+
       
       // If the API response includes strategy information, update our strategy data
       if (response.data.strategy) {
@@ -946,8 +897,14 @@ export default function Dashboard() {
   useEffect(() => {
     if (portfolio && portfolio.allocation && portfolio.allocation.length > 0) {
       fetchAIPredictions(selectedStrategy);
+      
     }
   }, [portfolio]); // Only depend on portfolio changes, not selectedStrategy
+
+  // Log aiAllocation whenever it changes
+  useEffect(() => {
+    console.log('AI Allocation State:', aiAllocation);
+  }, [aiAllocation]);
 
   // Fetch swap history when session is available
   useEffect(() => {
@@ -969,7 +926,7 @@ export default function Dashboard() {
         timestamp: new Date().toISOString()
       };
 
-      const response = await fetch("/api/store-logs", {
+      const response = await fetch("/api/storelogsr2", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1004,35 +961,38 @@ export default function Dashboard() {
     setHistoryError(null);
 
     try {
-      const response = await fetch("/api/store-logs");
+      const response = await fetch("/api/storelogsr2");
       const result = await response.json();
 
-      if (result.success && result.bucket?.objects?.body?.GfSpListObjectsByBucketNameResponse?.Objects) {
-        const objects = result.bucket.objects.body.GfSpListObjectsByBucketNameResponse.Objects;
+      if (result.success && result.bucket?.objects?.Contents) {
+        const objects = result.bucket.objects.Contents;
         
         // Fetch content for each object
         const historyPromises = objects.map(async (obj: any) => {
           try {
-            const contentResponse = await fetch(`/api/store-logs?objectName=${obj.ObjectInfo.ObjectName}`);
-            const contentResult = await contentResponse.json();
-            
+            const objectName = obj.Key;
+            const objectUrl = `https://cdn.techkareer.com/${objectName}`;
+        
+            const contentResponse = await fetch(objectUrl);
+            const content = await contentResponse.json();
+        
             return {
-              name: obj.ObjectInfo.ObjectName,
-              info: obj.ObjectInfo,
-              content: contentResult.object?.content,
-              downloadError: contentResult.object?.downloadError
+              name: objectName,
+              info: obj,
+              content,
+              url: objectUrl
             };
           } catch (error) {
             return {
-              name: obj.ObjectInfo.ObjectName,
-              info: obj.ObjectInfo,
+              name: obj.Key,
+              info: obj,
               downloadError: `Failed to fetch content: ${error}`
             };
           }
         });
 
         const historyData = await Promise.all(historyPromises);
-        
+        console.log("session.user.walletAddress", session.user.walletAddress)
         // Filter only swap logs and sort by timestamp (newest first)
         const swapLogs = historyData
           .filter(item => item.name.includes(`${session.user.walletAddress?.toLowerCase()}-logs`) && item.content)
@@ -1362,6 +1322,7 @@ export default function Dashboard() {
                               paddingAngle={2}
                               dataKey="percentage"
                             >
+                              
                               {Object.entries(aiAllocation).map(([token, _], index) => (
                                 <Cell 
                                   key={`cell-${index}`} 
@@ -1460,18 +1421,20 @@ export default function Dashboard() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        {Object.entries(strategy.allocation).map(([token, percentage]) => (
-                          <div key={token} className="flex flex-col items-center">
-                            <CircularProgress
-                              value={typeof percentage === 'number' ? percentage : Number(percentage)}
-                              color={TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR}
-                              label={token}
-                              sublabel={`${typeof percentage === 'number' ? percentage : Number(percentage)}%`}
-                            />
-                          </div>
-                        ))}
-                      </div>
+                  {strategy?.allocation && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      {Object.entries(strategy.allocation).map(([token, percentage]) => (
+                        <div key={token} className="flex flex-col items-center">
+                          <CircularProgress
+                            value={typeof percentage === 'number' ? percentage : Number(percentage)}
+                            color={TOKEN_COLORS[token as keyof typeof TOKEN_COLORS] || FALLBACK_COLOR}
+                            label={token}
+                            sublabel={`${typeof percentage === 'number' ? percentage : Number(percentage)}%`}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                     </div>
                   </TabsContent>
                 ))}
@@ -1775,7 +1738,7 @@ export default function Dashboard() {
           <Card className="bg-gray-800/50 border-gray-700 backdrop-blur-sm">
             <CardHeader className="pb-4">
               <CardTitle className="text-lg">Portfolio Rebalancing History</CardTitle>
-              <CardDescription>Your transaction history stored on BNB Greenfield</CardDescription>
+              <CardDescription>Your transaction history stored in the bucket</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {isLoadingHistory ? (
@@ -1909,11 +1872,11 @@ export default function Dashboard() {
                 </div>
               )}
             </CardContent>
-            <CardFooter className="bg-gray-800/80 border-t border-gray-700">
+            {/* <CardFooter className="bg-gray-800/80 border-t border-gray-700">
               <div className="text-xs text-gray-400 text-center w-full">
                 Data stored securely on BNB Greenfield decentralized storage
               </div>
-            </CardFooter>
+            </CardFooter> */}
           </Card>
         </section>
       </main>
