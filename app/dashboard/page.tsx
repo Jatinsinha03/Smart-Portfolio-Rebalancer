@@ -37,7 +37,7 @@ const AGENT_SWAP_ABI = [
 ];
 
 // Contract address for AgentSwap - replace with actual contract address when deployed
-const AGENT_SWAP_ADDRESS = process.env.CONTRACT_ADDRESS || '';
+const AGENT_SWAP_ADDRESS = "0x8f34751023D140C75A62B0809dB3E04c8F59428c";
 
 // Token addresses (match the ones in the API)
 const TOKEN_ADDRESSES = {
@@ -1471,7 +1471,7 @@ export default function Dashboard() {
                       <div className="mt-2 space-y-1">
                         {transactionHash.firstSwap && (
                           <a 
-                            href={`https://testnet.bscscan.com/tx/${transactionHash.firstSwap}`} 
+                            href={`https://bscscan.com/tx/${transactionHash.firstSwap}`} 
                             target="_blank" 
                             rel="noopener noreferrer"
                             className="text-sm text-cyan-400 hover:text-cyan-300 underline block"
@@ -1481,7 +1481,7 @@ export default function Dashboard() {
                         )}
                         {transactionHash.secondSwap && (
                           <a 
-                            href={`https://testnet.bscscan.com/tx/${transactionHash.secondSwap}`} 
+                            href={`https://bscscan.com/tx/${transactionHash.secondSwap}`} 
                             target="_blank" 
                             rel="noopener noreferrer"
                             className="text-sm text-cyan-400 hover:text-cyan-300 underline block"
