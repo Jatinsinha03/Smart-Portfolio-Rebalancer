@@ -37,19 +37,19 @@ const AGENT_SWAP_ABI = [
 ];
 
 // Contract address for AgentSwap - replace with actual contract address when deployed
-const AGENT_SWAP_ADDRESS = "0x8f34751023D140C75A62B0809dB3E04c8F59428c";
+const AGENT_SWAP_ADDRESS = process.env.CONTRACT_ADDRESS || '';
 
 // Token addresses (match the ones in the API)
 const TOKEN_ADDRESSES = {
-  "BUSD": "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56",
-  "WBNB": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+  "TWT": "0x4B0F1812e5Df2A09796481Ff14017e6005508003",
+  "XVS": "0xcF6BB5389c92Bdda8a3747Ddb454cB7a64626C63",
   "CAKE": "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82"
 };
 
 // Token color scheme
 const TOKEN_COLORS = {
-  "BUSD": "#F0B90B",
-  "WBNB": "#F3BA2F",
+  "TWT": "#F0B90B",
+  "XVS": "#F3BA2F",
   "CAKE": "#8B5CF6"
 };
 
@@ -1065,7 +1065,7 @@ export default function Dashboard() {
             </div>
             <div>
               <h1 className="text-xl font-bold bg-gradient-to-r from-cyan-400 to-purple-500 bg-clip-text text-transparent">
-                Smart Portfolio Rebalancer
+                Neurobalance
               </h1>
               <p className="text-sm text-gray-400">Dashboard</p>
             </div>
@@ -1234,7 +1234,7 @@ export default function Dashboard() {
                     <Wallet className="w-12 h-12 text-gray-400 mx-auto mb-3" />
                     <p>No tokens found in your wallet</p>
                     <p className="text-sm text-gray-400 mt-2">
-                      Connect your wallet or add BUSD/WBNB tokens to your wallet
+                      Connect your wallet or add TWT/XVS/CAKE tokens to your wallet
                     </p>
                   </div>
                 )}

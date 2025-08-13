@@ -5,13 +5,13 @@ import { JsonRpcProvider, Contract, formatUnits } from "ethers";
 // Define ERC-20 token addresses on BNB Testnet
 const TOKENS = [
   {
-    symbol: "BUSD",
-    address: "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56", // BUSD (mainnet)
+    symbol: "TWT",
+    address: "0x4B0F1812e5Df2A09796481Ff14017e6005508003", // TWT (mainnet)
     decimals: 18
   },
   {
-    symbol: "WBNB",
-    address: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", // WBNB (mainnet)
+    symbol: "XVS",
+    address: "0xcF6BB5389c92Bdda8a3747Ddb454cB7a64626C63", // XVS (mainnet)
     decimals: 18
   },
   {
@@ -25,6 +25,34 @@ const erc20Abi = [
   "function balanceOf(address owner) view returns (uint256)",
   "function decimals() view returns (uint8)"
 ];
+
+// Price service base URL (Flask). Configure via env var AI_MODEL_URL, defaults to local.
+const PRICE_API_BASE = "https://lstm-backend-production.up.railway.app";
+
+async function fetchPrice(symbol: string): Promise<number | null> {
+  try {
+    const requestBody = { symbol };
+    console.log(`Sending to Flask /price:`, JSON.stringify(requestBody, null, 2));
+    
+    const res = await fetch(`${PRICE_API_BASE}/price`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+      // In prod behind HTTPS/self-signed, you may need to proxy instead
+    });
+    if (!res.ok) {
+      console.error(`Price API returned ${res.status} for ${symbol}`);
+      return null;
+    }
+    const data = await res.json();
+    const price = typeof data.price === "string" ? parseFloat(data.price) : data.price;
+    if (Number.isFinite(price)) return price as number;
+    return null;
+  } catch (err) {
+    console.error(`Failed to fetch price for ${symbol}:`, err);
+    return null;
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -49,12 +77,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Use more precise token prices
-    const tokenPrices: Record<string, number> = {
-      "BUSD": 1.0,
-      "WBNB": 842,
-      "CAKE": 3.05
-    };
+    // Fetch live prices for TWT, XVS, CAKE from Flask service
+    const symbolsToFetch = TOKENS.map(t => t.symbol); // ["TWT", "XVS", "CAKE"]
+    const priceEntries = await Promise.all(
+      symbolsToFetch.map(async (sym) => {
+        const p = await fetchPrice(sym);
+        console.log(sym,p);
+        return [sym, p] as const;
+      })
+    );
+    const tokenPrices: Record<string, number> = {};
+    for (const [sym, p] of priceEntries) {
+      if (p !== null) tokenPrices[sym] = p;
+    }
 
     const tokenValues: Record<string, number> = {};
     let totalValue = 0;

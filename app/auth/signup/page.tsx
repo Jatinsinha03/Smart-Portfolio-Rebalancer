@@ -224,24 +224,24 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 text-white relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-b from-black via-neutral-900 to-neutral-800 text-white relative overflow-hidden">
       {/* 3D Background */}
       <div className="absolute inset-0 opacity-25">
         <BackgroundScene />
       </div>
 
-      {/* Background Effects */}
+      {/* Background Effects
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-purple-900/30 via-gray-900/20 to-gray-900/20" />
-      <div className="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg width=&quot;60&quot; height=&quot;60&quot; viewBox=&quot;0 0 60 60&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;%3E%3Cg fill=&quot;none&quot; fillRule=&quot;evenodd&quot;%3E%3Cg fill=&quot;%239C92AC&quot; fillOpacity=&quot;0.05&quot;%3E%3Ccircle cx=&quot;30&quot; cy=&quot;30&quot; r=&quot;1&quot;/%3E%3C/g%3E%3C/g%3E%3C/svg%3E')] opacity-20" />
+      <div className="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg width=&quot;60&quot; height=&quot;60&quot; viewBox=&quot;0 0 60 60&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;%3E%3Cg fill=&quot;none&quot; fillRule=&quot;evenodd&quot;%3E%3Cg fill=&quot;%239C92AC&quot; fillOpacity=&quot;0.05&quot;%3E%3Ccircle cx=&quot;30&quot; cy=&quot;30&quot; r=&quot;1&quot;/%3E%3C/g%3E%3C/g%3E%3C/svg%3E')] opacity-20" /> */}
 
       {/* Header */}
       <header className="relative z-10 p-6">
         <Link href="/" className="flex items-center space-x-2">
-          <div className="w-8 h-8 bg-gradient-to-r from-cyan-400 to-purple-500 rounded-lg flex items-center justify-center">
-            <Wallet className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-xl font-bold bg-gradient-to-r from-cyan-400 to-purple-500 bg-clip-text text-transparent">
-            Smart Portfolio
+        <div className="w-10 h-10 bg-gradient-to-br from-neutral-300 to-neutral-50 rounded-lg flex items-center justify-center shadow-lg shadow-yellow-500/20">
+          <Wallet className="w-5 h-5 text-neutral-900 " />
+        </div>
+          <span className="text-xl font-bold bg-gradient-to-r from-[#F0B90B] via-[#FFD84D] to-[#FFF2B0] bg-clip-text text-transparent">
+            NeuroBalance
           </span>
         </Link>
       </header>
@@ -266,7 +266,7 @@ export default function SignupPage() {
               </motion.div>
               <div>
                 <CardTitle className="text-2xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
-                  Join Smart Portfolio
+                  Join NeuroBalance
                 </CardTitle>
                 <CardDescription className="text-gray-400 mt-2">
                   Create your account and start optimizing your crypto portfolio
@@ -363,12 +363,12 @@ export default function SignupPage() {
                   </div>
                 </div>
 
-                <div className="relative">
+                {/* <div className="relative">
                   <Separator className="bg-gray-700" />
                   <div className="absolute inset-0 flex items-center justify-center">
                     <span className="bg-gray-800 px-3 text-sm text-gray-400">connect wallet (optional)</span>
                   </div>
-                </div>
+                </div> */}
 
                 {/* Wallet Connection */}
                 <div className="flex justify-center py-2">
@@ -409,7 +409,7 @@ export default function SignupPage() {
                 <Button
                   type="submit"
                   disabled={isLoading || !agreeToTerms}
-                  className="w-full bg-gradient-to-r from-cyan-500 to-purple-600 hover:from-cyan-600 hover:to-purple-700 border-0 text-white"
+                  className="w-full bg-gradient-to-r from-[#F0B90B] via-[#FFD84D] to-[#FFF2B0] border-0 text-neutral-900"
                 >
                   {isLoading ? "Creating Account..." : "Create Account"}
                   <ArrowRight className="ml-2 w-4 h-4" />
