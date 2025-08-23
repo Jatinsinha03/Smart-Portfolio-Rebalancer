@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import axios from "axios";
 
 // Define AI Model API endpoint
-const AI_MODEL_URL = "https://lstm-backend-production.up.railway.app"; // Base URL for AI model server
+const AI_MODEL_URL = "https://lstm-backend-production-d690.up.railway.app"; // Base URL for AI model server
 
 // export async function POST(req: NextRequest) {
 //   try {

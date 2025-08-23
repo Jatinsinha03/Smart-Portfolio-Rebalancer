@@ -27,7 +27,7 @@ const erc20Abi = [
 ];
 
 // Price service base URL (Flask). Configure via env var AI_MODEL_URL, defaults to local.
-const PRICE_API_BASE = "https://lstm-backend-production.up.railway.app";
+const PRICE_API_BASE = "https://lstm-backend-production-d690.up.railway.app";
 
 async function fetchPrice(symbol: string): Promise<number | null> {
   try {
